@@ -24,7 +24,7 @@ cat /etc/sudoers.d/AQC_Unlock
     pkg=AQC_Unlock
     file=/etc/sudoers.d/AQC_Unlock
     script=/var/packages/AQC_Unlock/scripts/start-stop-status-root
-    echo "$pkg ALL=($pkg) NOPASSWD: $script" > "$file"
+    echo "$pkg ALL=(root) NOPASSWD: $script" > "$file"
     chmod 0440 "$file"
     cat "$file"
     ```
