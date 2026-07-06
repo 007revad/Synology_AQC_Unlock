@@ -12,6 +12,10 @@ ATLANTIC_MODULES="/lib/modules/atlantic.ko /lib/modules/atlantic_v2.ko"
 
 AQUANTIA_VENDOR="0x1d6a"
 
+NETSCRIPTS_DIR="/etc/sysconfig/network-scripts"
+OVS_INTERFACE_CONF="/usr/syno/etc/synoovs/ovs_interface.conf"
+SYNOINFO="/etc/synoinfo.conf"
+
 # Self-contained modinfo access via the multi-call kmod binary
 MODINFO_LINK="${VAR_DIR}/modinfo"
 
@@ -60,52 +64,184 @@ wait_for_iface() {
     return 1
 }
 
-disable_ipv6_for() {
-    iface="$1"
-    ifcfg="/etc/sysconfig/network-scripts/ifcfg-${iface}"
-
-    if [ ! -f "$ifcfg" ]; then
-        log_message "No ifcfg found for ${iface}, leaving IPv6 at kernel default"
-        return 0
-    fi
-
-    ipv6init=$(grep "^IPV6INIT=" "$ifcfg" 2>/dev/null | cut -d= -f2 | tr 'A-Z' 'a-z')
-
-    if [ "$ipv6init" != "off" ]; then
-        log_message "${iface} IPv6 setting is '${ipv6init:-unset}' (not off), leaving IPv6 enabled"
-        return 0
-    fi
-
-    sysctl_path="/proc/sys/net/ipv6/conf/${iface}/disable_ipv6"
-    if [ -f "$sysctl_path" ]; then
-        if echo 1 > "$sysctl_path" 2>/dev/null; then
-            log_message "DSM setting for ${iface} is IPv6 Off - disabled IPv6"
-        else
-            log_message "Failed to disable IPv6 on ${iface}"
-        fi
-    fi
+# Read a KEY=value (optionally quoted) field from an ifcfg-style file.
+# Returns empty string (not an error) if the file or key is missing.
+get_ifcfg_value() {
+    file="$1"
+    key="$2"
+    [ -f "$file" ] || return 0
+    grep "^${key}=" "$file" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' || true
 }
 
-start_dhclient_for() {
+# Mirrors rc.network's get_mtu_value(): reads "<iface>_mtu" from synoinfo.conf
+get_mtu_value() {
     iface="$1"
+    get_ifcfg_value "$SYNOINFO" "${iface}_mtu"
+}
+
+# Create a new OVS bridge for a given physical interface, reading any existing
+# DSM configuration for that interface (BOOTPROTO/IPADDR/NETMASK/IPV6INIT) so a
+# user's prior explicit choice for this slot is respected exactly, mirroring
+# what rc.network's check_external_interface_for_ovs()/activate_ovs() do.
+create_ovs_bridge_for() {
+    iface="$1"
+    bridge="ovs_${iface}"
+    ethcfg="${NETSCRIPTS_DIR}/ifcfg-${iface}"
+    ovscfg="${NETSCRIPTS_DIR}/ifcfg-${bridge}"
+
+    ethcfg_existed="yes"
+    if [ ! -f "$ethcfg" ]; then
+        ethcfg_existed="no"
+        log_message "No existing ifcfg-${iface}, creating a minimal DHCP default"
+        {
+            echo "DEVICE=${iface}"
+            echo "BOOTPROTO=dhcp"
+            echo "ONBOOT=yes"
+            echo "IPV6INIT=auto"
+        } > "$ethcfg"
+    fi
+
+    bootproto=$(get_ifcfg_value "$ethcfg" "BOOTPROTO")
+    [ -n "$bootproto" ] || bootproto="dhcp"
+    ipv6init=$(get_ifcfg_value "$ethcfg" "IPV6INIT")
+    [ -n "$ipv6init" ] || ipv6init="auto"
+    ipaddr=$(get_ifcfg_value "$ethcfg" "IPADDR")
+    netmask=$(get_ifcfg_value "$ethcfg" "NETMASK")
+
+    log_message "${iface}: BOOTPROTO=${bootproto} IPV6INIT=${ipv6init}${ipaddr:+ IPADDR=${ipaddr}}${netmask:+ NETMASK=${netmask}}"
+
+    # Register this physical interface with DSM's OVS tracking, and mark it as
+    # bridged - matching exactly what rc.network's boot-time scan would write.
+    if ! grep -qx "$iface" "$OVS_INTERFACE_CONF" 2>/dev/null; then
+        echo "$iface" >> "$OVS_INTERFACE_CONF"
+    fi
+    /usr/syno/bin/synosetkeyvalue "$ethcfg" BRIDGE "$bridge" 2>/dev/null || true
+
+    # Create the bridge's own ifcfg file
+    /usr/syno/bin/synosetkeyvalue "$ovscfg" DEVICE "$bridge" 2>/dev/null || true
+    /usr/syno/bin/synosetkeyvalue "$ovscfg" BOOTPROTO "$bootproto" 2>/dev/null || true
+    /usr/syno/bin/synosetkeyvalue "$ovscfg" ONBOOT yes 2>/dev/null || true
+    /usr/syno/bin/synosetkeyvalue "$ovscfg" TYPE OVS 2>/dev/null || true
+    /usr/syno/bin/synosetkeyvalue "$ovscfg" PRIMARY "$iface" 2>/dev/null || true
+    /usr/syno/bin/synosetkeyvalue "$ovscfg" IPV6INIT "$ipv6init" 2>/dev/null || true
+    /usr/syno/bin/synosetkeyvalue "$ovscfg" IPV6_ACCEPT_RA 1 2>/dev/null || true
+    if [ "$bootproto" = "static" ]; then
+        [ -n "$ipaddr" ] && /usr/syno/bin/synosetkeyvalue "$ovscfg" IPADDR "$ipaddr" 2>/dev/null || true
+        [ -n "$netmask" ] && /usr/syno/bin/synosetkeyvalue "$ovscfg" NETMASK "$netmask" 2>/dev/null || true
+    fi
+
+    # Create the live bridge, matching rc.network's activate_ovs() sequence
+    if ! ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+        ovs-vsctl add-br "$bridge"
+        log_message "Created OVS bridge ${bridge}"
+    fi
+
+    physmac=$(cat "/sys/class/net/${iface}/address" 2>/dev/null || true)
+    if [ -n "$physmac" ]; then
+        ovs-vsctl set bridge "$bridge" other-config:hwaddr="$physmac" 2>/dev/null || true
+    fi
+
+    ip addr flush dev "$iface" 2>/dev/null || true
     ip link set "$iface" up 2>/dev/null || true
 
-    lf="/tmp/dhcpv4.leases.${iface}"
-    pf="/tmp/dhcpcd-${iface}.pid"
+    # DSM unconditionally disables IPv6 on the physical bridge-member port,
+    # regardless of the user's IPV6INIT choice - the bridge is what carries
+    # the real setting.
+    if [ -f "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" ]; then
+        echo 1 > "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" 2>/dev/null || true
+    fi
 
-    /usr/sbin/dhclient -4 -d -q \
-        -lf "$lf" \
-        -pf "$pf" \
-        -cf /etc/dhclient/ipv4/dhclient.conf \
-        -sf /var/run/dhclient-script \
-        "$iface" >/dev/null 2>&1 &
+    if ! ovs-vsctl list-ports "$bridge" 2>/dev/null | grep -qx "$iface"; then
+        ovs-vsctl add-port "$bridge" "$iface"
+    fi
 
-    log_message "Started dhclient for ${iface} (pidfile ${pf})"
+    mtu_value=$(get_mtu_value "$iface")
+    if [ -n "$mtu_value" ]; then
+        ifconfig "$iface" mtu "$mtu_value" 2>/dev/null || true
+    fi
+
+    ip link set "$bridge" up 2>/dev/null || true
+
+    if [ "$ipv6init" = "off" ]; then
+        if [ -f "/proc/sys/net/ipv6/conf/${bridge}/disable_ipv6" ]; then
+            echo 1 > "/proc/sys/net/ipv6/conf/${bridge}/disable_ipv6" 2>/dev/null || true
+        fi
+        log_message "${bridge}: IPv6 Off (per ${iface}'s DSM setting) - disabled"
+    else
+        log_message "${bridge}: IPv6 setting is '${ipv6init}' - left enabled"
+    fi
+
+    if [ "$bootproto" = "static" ]; then
+        if [ -n "$ipaddr" ] && [ -n "$netmask" ]; then
+            if [ -n "$mtu_value" ]; then
+                ifconfig "$bridge" "$ipaddr" netmask "$netmask" mtu "$mtu_value" 2>/dev/null || true
+            else
+                ifconfig "$bridge" "$ipaddr" netmask "$netmask" 2>/dev/null || true
+            fi
+            log_message "${bridge}: applied static ${ipaddr}/${netmask}"
+        else
+            log_message "${bridge}: BOOTPROTO=static but IPADDR/NETMASK missing, not configuring an address"
+        fi
+    else
+        lf="/tmp/dhcpv4.leases.${bridge}"
+        pf="/tmp/dhcpcd-${bridge}.pid"
+        /usr/sbin/dhclient -4 -d -q \
+            -lf "$lf" \
+            -pf "$pf" \
+            -cf /etc/dhclient/ipv4/dhclient.conf \
+            -sf /var/run/dhclient-script \
+            "$bridge" >/dev/null 2>&1 &
+        log_message "Started dhclient for ${bridge} (pidfile ${pf})"
+    fi
+
+    # Record everything teardown needs: iface|bridge|bootproto|ethcfg_existed
+    echo "${iface}|${bridge}|${bootproto}|${ethcfg_existed}" >> "${STATE_DIR}/ovs_bridges"
+}
+
+teardown_ovs_bridge_for() {
+    iface="$1"
+    bridge="$2"
+    bootproto="$3"
+    ethcfg_existed="$4"
+
+    ethcfg="${NETSCRIPTS_DIR}/ifcfg-${iface}"
+    ovscfg="${NETSCRIPTS_DIR}/ifcfg-${bridge}"
+
+    if [ "$bootproto" != "static" ]; then
+        pf="/tmp/dhcpcd-${bridge}.pid"
+        if [ -f "$pf" ]; then
+            kill "$(cat "$pf")" 2>/dev/null || true
+            rm -f "$pf"
+        fi
+        log_message "Stopped dhclient for ${bridge}"
+    fi
+
+    if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+        ip link set "$bridge" down 2>/dev/null || true
+        ovs-vsctl del-br "$bridge" 2>/dev/null || true
+        log_message "Removed OVS bridge ${bridge}"
+    fi
+
+    rm -f "$ovscfg"
+
+    if [ "$ethcfg_existed" = "yes" ]; then
+        # Only strip the BRIDGE field we added - leave the user's own
+        # BOOTPROTO/IPADDR/NETMASK/IPV6INIT preference for this slot untouched.
+        sed -i '/^BRIDGE=/d' "$ethcfg" 2>/dev/null || true
+    else
+        # We created this file fresh at start time - remove it entirely.
+        rm -f "$ethcfg"
+    fi
+
+    sed -i "/^${iface}\$/d" "$OVS_INTERFACE_CONF" 2>/dev/null || true
+
+    log_message "Reverted ifcfg/OVS registration for ${iface}"
 }
 
 inject_and_bind() {
     mkdir -p "$STATE_DIR" 2>/dev/null || true
     : > "${STATE_DIR}/injections" 2>/dev/null || true
+    : > "${STATE_DIR}/ovs_bridges" 2>/dev/null || true
     log_message "Starting Aquantia device scan"
     found_any=0
 
@@ -166,15 +302,14 @@ inject_and_bind() {
             continue
         fi
 
-        # Record everything needed to fully reverse this injection later:
+        # Record everything needed to fully reverse the new_id injection later:
         # BDF | module | vendor | device | space-separated iface list
         bdf=$(basename "$dev")
         iface_list=$(echo "$ifaces" | tr '\n' ' ' | sed 's/ *$//')
         echo "${bdf}|${matched_module}|${vendor_lc}|${device_lc}|${iface_list}" >> "${STATE_DIR}/injections"
 
         for iface in $ifaces; do
-            disable_ipv6_for "$iface"
-            start_dhclient_for "$iface"
+            create_ovs_bridge_for "$iface"
         done
     done
 
@@ -184,6 +319,14 @@ inject_and_bind() {
 }
 
 stop_managed_ifaces() {
+    if [ -f "${STATE_DIR}/ovs_bridges" ]; then
+        while IFS='|' read -r iface bridge bootproto ethcfg_existed; do
+            [ -n "$iface" ] || continue
+            teardown_ovs_bridge_for "$iface" "$bridge" "$bootproto" "$ethcfg_existed"
+        done < "${STATE_DIR}/ovs_bridges"
+        rm -f "${STATE_DIR}/ovs_bridges"
+    fi
+
     if [ ! -f "${STATE_DIR}/injections" ]; then
         log_message "No recorded injections to reverse"
         return 0
@@ -192,19 +335,9 @@ stop_managed_ifaces() {
     while IFS='|' read -r bdf module vendor device iface_list; do
         [ -n "$bdf" ] || continue
 
-        # 1. Stop this interface's dhclient
-        for iface in $iface_list; do
-            pf="/tmp/dhcpcd-${iface}.pid"
-            if [ -f "$pf" ]; then
-                kill "$(cat "$pf")" 2>/dev/null || true
-                rm -f "$pf"
-            fi
-            log_message "Stopped dhclient for ${iface}"
-        done
-
         driver_dir="/sys/bus/pci/drivers/${module}"
 
-        # 2. Unbind the device from the driver so it returns to its pre-injection state
+        # Unbind the device from the driver so it returns to its pre-injection state
         if [ -e "/sys/bus/pci/devices/${bdf}/driver" ]; then
             if echo "$bdf" > "${driver_dir}/unbind" 2>/dev/null; then
                 log_message "Unbound ${bdf} from ${module}"
@@ -213,8 +346,8 @@ stop_managed_ifaces() {
             fi
         fi
 
-        # 3. Remove the dynamic ID entry so the driver no longer auto-claims this ID
-        #    on any future device add/rescan
+        # Remove the dynamic ID entry so the driver no longer auto-claims this ID
+        # on any future device add/rescan
         if [ -f "${driver_dir}/remove_id" ]; then
             if echo "${vendor} ${device}" > "${driver_dir}/remove_id" 2>/dev/null; then
                 log_message "Removed ${vendor}:${device} from ${module}'s dynamic ID list"
