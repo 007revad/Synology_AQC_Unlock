@@ -7,8 +7,6 @@
 [![](https://img.shields.io/static/v1?label=Sponsor&message=%E2%9D%A4&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/007revad)
 <!--- [![committers.top badge](https://user-badge.committers.top/australia/007revad.svg)](https://user-badge.committers.top/australia/007revad) --->
 
-## Enable "Settings > General > Sponsorship" in the new repo
-
 ## Change TEMPLATE.sh in .github/workflows/build_n_release.yml to script's name
 If the repo has multiple files that need to be included in the zip file add them as well, e.g. <br>
 `zip "$zip_name" syno_hdd_db.sh syno_hdd_shutdown.sh syno_hdd_vendors.txt syno_hdd_db.conf`
@@ -20,7 +18,7 @@ See github/Repositores/Sync_my-other-scripts_token. txt<br> <br>
 
 ### Description
 
-Description goes here
+DSM 7 package that allows you to use non-Synology Aquantia Marvell AQC107, AQC113 and AQC113C based PCIe network cards.
 
 ### Download the script
 
