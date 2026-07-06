@@ -1,4 +1,4 @@
-# <img src="images/icon.png" width="40"> Synology AQC Unlock
+# Synology AQC Unlock
 
 <a href="https://github.com/007revad/Synology_AQC_Unlock/releases"><img src="https://img.shields.io/github/release/007revad/Synology_AQC_Unlock.svg"></a>
 [![Github Releases](https://img.shields.io/github/downloads/007revad/Synology_AQC_Unlock/total.svg)](https://github.com/007revad/Synology_AQC_Unlock/releases)
