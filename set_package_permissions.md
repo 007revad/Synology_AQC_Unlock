@@ -6,9 +6,9 @@ There are 2 ways you can set the required permissions for the package.
 
 ```
 sudo -i
-echo "OoklaSpeedtest ALL=(OoklaSpeedtest) NOPASSWD: /var/packages/OoklaSpeedtest/target/bin/speedtest.sh" > /etc/sudoers.d/OoklaSpeedtest
-chmod 0440 /etc/sudoers.d/OoklaSpeedtest
-cat /etc/sudoers.d/OoklaSpeedtest
+echo "AQC_Unlock ALL=(root) NOPASSWD: /var/packages/AQC_Unlock/scripts/start-stop-status-root" > /etc/sudoers.d/AQC_Unlock
+chmod 0440 /etc/sudoers.d/AQC_Unlock
+cat /etc/sudoers.d/AQC_Unlock
 ```
 
 ### Set package permissions in Synology Task Scheduler
@@ -16,14 +16,14 @@ cat /etc/sudoers.d/OoklaSpeedtest
 1. Go to **Control Panel** > **Task Scheduler** > click **Create** > and select **Scheduled Task**.
 2. Select **User-defined script**.
 3. Enter a task name.
-4. Select **root** as the user (The speedtest binary needs to run with elevated permissions).
+4. Select **root** as the user (The AQC Unlock needs to run with elevated permissions).
 5. Untick **Enable** so it does **not** run on a schedule.
 6. Click **Task Settings**.
 7. In the box under **User-defined script** copy and paste the following. 
     ```
-    pkg=OoklaSpeedtest
-    file=/etc/sudoers.d/OoklaSpeedtest
-    script=/var/packages/OoklaSpeedtest/target/bin/speedtest.sh
+    pkg=AQC_Unlock
+    file=/etc/sudoers.d/AQC_Unlock
+    script=/var/packages/AQC_Unlock/scripts/start-stop-status-root
     echo "$pkg ALL=($pkg) NOPASSWD: $script" > "$file"
     chmod 0440 "$file"
     cat "$file"

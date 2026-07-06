@@ -1,0 +1,254 @@
+#!/bin/sh
+
+set -eu
+
+PKG_NAME="AQC_Unlock"
+VAR_DIR="/var/packages/${PKG_NAME}/var"
+STATE_DIR="${VAR_DIR}/state"
+LOG_FILE="${VAR_DIR}/aquantia.log"
+
+# Real DSM atlantic modules on this system (not bundled with the package)
+ATLANTIC_MODULES="/lib/modules/atlantic.ko /lib/modules/atlantic_v2.ko"
+
+AQUANTIA_VENDOR="0x1d6a"
+
+# Self-contained modinfo access via the multi-call kmod binary
+MODINFO_LINK="${VAR_DIR}/modinfo"
+
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE" 2>/dev/null || true
+}
+
+log_identity() {
+    mkdir -p "$VAR_DIR" 2>/dev/null || true
+    id_output=$(id 2>&1 || true)
+    log_message "Invoked as: ${id_output}"
+}
+
+ensure_modinfo() {
+    mkdir -p "$VAR_DIR" 2>/dev/null || true
+    if [ ! -e "$MODINFO_LINK" ]; then
+        ln -sf /bin/kmod "$MODINFO_LINK" 2>/dev/null || true
+    fi
+}
+
+# Extract VVVV:DDDD pairs (uppercase hex) a given .ko's alias table claims,
+# ignoring subsystem vendor/device fields entirely.
+get_supported_ids() {
+    modpath="$1"
+    [ -f "$modpath" ] || return 0
+    "$MODINFO_LINK" modinfo "$modpath" 2>/dev/null | grep "^alias:" | \
+        sed -n 's/.*pci:v0000\([0-9A-Fa-f]\{4\}\)d0000\([0-9A-Fa-f]\{4\}\).*/\1:\2/p' | \
+        tr 'a-f' 'A-F'
+}
+
+# Poll a PCI device's sysfs node for its resulting net interface name(s)
+wait_for_iface() {
+    dev_path="$1"
+    tries=0
+    while [ "$tries" -lt 20 ]; do
+        if [ -d "${dev_path}net" ]; then
+            ifaces=$(ls "${dev_path}net" 2>/dev/null || true)
+            if [ -n "$ifaces" ]; then
+                echo "$ifaces"
+                return 0
+            fi
+        fi
+        sleep 1
+        tries=$((tries + 1))
+    done
+    return 1
+}
+
+disable_ipv6_for() {
+    iface="$1"
+    ifcfg="/etc/sysconfig/network-scripts/ifcfg-${iface}"
+
+    if [ ! -f "$ifcfg" ]; then
+        log_message "No ifcfg found for ${iface}, leaving IPv6 at kernel default"
+        return 0
+    fi
+
+    ipv6init=$(grep "^IPV6INIT=" "$ifcfg" 2>/dev/null | cut -d= -f2 | tr 'A-Z' 'a-z')
+
+    if [ "$ipv6init" != "off" ]; then
+        log_message "${iface} IPv6 setting is '${ipv6init:-unset}' (not off), leaving IPv6 enabled"
+        return 0
+    fi
+
+    sysctl_path="/proc/sys/net/ipv6/conf/${iface}/disable_ipv6"
+    if [ -f "$sysctl_path" ]; then
+        if echo 1 > "$sysctl_path" 2>/dev/null; then
+            log_message "DSM setting for ${iface} is IPv6 Off - disabled IPv6"
+        else
+            log_message "Failed to disable IPv6 on ${iface}"
+        fi
+    fi
+}
+
+start_dhclient_for() {
+    iface="$1"
+    ip link set "$iface" up 2>/dev/null || true
+
+    lf="/tmp/dhcpv4.leases.${iface}"
+    pf="/tmp/dhcpcd-${iface}.pid"
+
+    /usr/sbin/dhclient -4 -d -q \
+        -lf "$lf" \
+        -pf "$pf" \
+        -cf /etc/dhclient/ipv4/dhclient.conf \
+        -sf /var/run/dhclient-script \
+        "$iface" >/dev/null 2>&1 &
+
+    log_message "Started dhclient for ${iface} (pidfile ${pf})"
+}
+
+inject_and_bind() {
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    : > "${STATE_DIR}/injections" 2>/dev/null || true
+    log_message "Starting Aquantia device scan"
+    found_any=0
+
+    for dev in /sys/bus/pci/devices/*/; do
+        vendor=$(cat "${dev}vendor" 2>/dev/null || true)
+        [ "$vendor" = "$AQUANTIA_VENDOR" ] || continue
+        found_any=1
+
+        # Already claimed by a driver (e.g. a genuine Synology-branded card, or already
+        # injected by a previous run of this script) - leave alone, but log it so a
+        # no-op run is distinguishable from the script never having run at all.
+        if [ -e "${dev}driver" ]; then
+            existing_driver=$(basename "$(readlink "${dev}driver")" 2>/dev/null || echo "unknown")
+            log_message "${dev} already bound to ${existing_driver}, skipping"
+            continue
+        fi
+
+        device=$(cat "${dev}device" 2>/dev/null || true)
+        [ -n "$device" ] || continue
+
+        vendor_hex=$(echo "${vendor#0x}" | tr 'a-f' 'A-F')
+        device_hex=$(echo "${device#0x}" | tr 'a-f' 'A-F')
+        target_id="${vendor_hex}:${device_hex}"
+
+        matched_module=""
+        for mod in $ATLANTIC_MODULES; do
+            ids=$(get_supported_ids "$mod" || true)
+            if echo "$ids" | grep -qx "$target_id"; then
+                matched_module=$(basename "$mod" .ko)
+                break
+            fi
+        done
+
+        if [ -z "$matched_module" ]; then
+            log_message "No known atlantic module claims ${vendor}:${device} at ${dev}, skipping"
+            continue
+        fi
+
+        driver_dir="/sys/bus/pci/drivers/${matched_module}"
+        if [ ! -d "$driver_dir" ]; then
+            log_message "${matched_module} not currently loaded, skipping ${dev}"
+            continue
+        fi
+
+        vendor_lc=$(echo "$vendor_hex" | tr 'A-F' 'a-f')
+        device_lc=$(echo "$device_hex" | tr 'A-F' 'a-f')
+
+        if echo "${vendor_lc} ${device_lc}" > "${driver_dir}/new_id" 2>/dev/null; then
+            log_message "Injected ${vendor_lc}:${device_lc} into ${matched_module} for ${dev}"
+        else
+            log_message "Failed to write new_id for ${vendor_lc}:${device_lc} on ${matched_module}"
+            continue
+        fi
+
+        ifaces=$(wait_for_iface "$dev" || true)
+        if [ -z "$ifaces" ]; then
+            log_message "Timed out waiting for interface to appear for ${dev}, will not be able to fully reverse this injection on stop"
+            continue
+        fi
+
+        # Record everything needed to fully reverse this injection later:
+        # BDF | module | vendor | device | space-separated iface list
+        bdf=$(basename "$dev")
+        iface_list=$(echo "$ifaces" | tr '\n' ' ' | sed 's/ *$//')
+        echo "${bdf}|${matched_module}|${vendor_lc}|${device_lc}|${iface_list}" >> "${STATE_DIR}/injections"
+
+        for iface in $ifaces; do
+            disable_ipv6_for "$iface"
+            start_dhclient_for "$iface"
+        done
+    done
+
+    if [ "$found_any" -eq 0 ]; then
+        log_message "No Aquantia (vendor ${AQUANTIA_VENDOR}) PCI devices found on this system"
+    fi
+}
+
+stop_managed_ifaces() {
+    if [ ! -f "${STATE_DIR}/injections" ]; then
+        log_message "No recorded injections to reverse"
+        return 0
+    fi
+
+    while IFS='|' read -r bdf module vendor device iface_list; do
+        [ -n "$bdf" ] || continue
+
+        # 1. Stop this interface's dhclient
+        for iface in $iface_list; do
+            pf="/tmp/dhcpcd-${iface}.pid"
+            if [ -f "$pf" ]; then
+                kill "$(cat "$pf")" 2>/dev/null || true
+                rm -f "$pf"
+            fi
+            log_message "Stopped dhclient for ${iface}"
+        done
+
+        driver_dir="/sys/bus/pci/drivers/${module}"
+
+        # 2. Unbind the device from the driver so it returns to its pre-injection state
+        if [ -e "/sys/bus/pci/devices/${bdf}/driver" ]; then
+            if echo "$bdf" > "${driver_dir}/unbind" 2>/dev/null; then
+                log_message "Unbound ${bdf} from ${module}"
+            else
+                log_message "Failed to unbind ${bdf} from ${module}"
+            fi
+        fi
+
+        # 3. Remove the dynamic ID entry so the driver no longer auto-claims this ID
+        #    on any future device add/rescan
+        if [ -f "${driver_dir}/remove_id" ]; then
+            if echo "${vendor} ${device}" > "${driver_dir}/remove_id" 2>/dev/null; then
+                log_message "Removed ${vendor}:${device} from ${module}'s dynamic ID list"
+            else
+                log_message "Failed to remove ${vendor}:${device} from ${module}'s dynamic ID list"
+            fi
+        fi
+    done < "${STATE_DIR}/injections"
+
+    rm -f "${STATE_DIR}/injections"
+}
+
+case "$1" in
+    start)
+        log_identity
+        ensure_modinfo
+        inject_and_bind
+        exit 0
+        ;;
+    stop)
+        stop_managed_ifaces
+        exit 0
+        ;;
+    status)
+        if [ -f "${STATE_DIR}/injections" ] && [ -s "${STATE_DIR}/injections" ]; then
+            exit 0
+        else
+            exit 3
+        fi
+        ;;
+    killall)
+        exit 0
+        ;;
+    log)
+        exit 0
+        ;;
+esac
