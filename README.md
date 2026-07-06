@@ -18,7 +18,7 @@ See github/Repositores/Sync_my-other-scripts_token. txt<br> <br>
 
 ### Description
 
-DSM 7 package that allows you to use non-Synology 10GbE PCIe network cards that have a Aquantia Marvell AQC107, AQC113 or AQC113C chip.
+DSM 7 package that allows you to use non-Synology 10GbE PCIe network cards that have a Marvell (Aquantia) AQC107, AQC113 or AQC113C chip.
 
 ### Download the script
 
