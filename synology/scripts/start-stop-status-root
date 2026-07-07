@@ -222,6 +222,32 @@ teardown_ovs_bridge_for() {
         log_message "Removed OVS bridge ${bridge}"
     fi
 
+    # DSM's Network Interface UI edits the bridge's ifcfg file (ifcfg-ovs_ethN),
+    # not the physical port's, while the bridge exists. Sync whatever the user's
+    # most recent change actually was back into ifcfg-ethN - our durable,
+    # persistent record for this slot - before we delete the bridge file.
+    if [ -f "$ovscfg" ]; then
+        live_bootproto=$(get_ifcfg_value "$ovscfg" "BOOTPROTO")
+        live_ipv6init=$(get_ifcfg_value "$ovscfg" "IPV6INIT")
+        live_ipaddr=$(get_ifcfg_value "$ovscfg" "IPADDR")
+        live_netmask=$(get_ifcfg_value "$ovscfg" "NETMASK")
+
+        if [ -n "$live_bootproto" ] && [ "$live_bootproto" != "$bootproto" ]; then
+            log_message "${iface}: bootproto changed ${bootproto} -> ${live_bootproto} while bridged, syncing back"
+        fi
+
+        [ -n "$live_bootproto" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" BOOTPROTO "$live_bootproto" 2>/dev/null || true; }
+        [ -n "$live_ipv6init" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" IPV6INIT "$live_ipv6init" 2>/dev/null || true; }
+
+        if [ "$live_bootproto" = "static" ]; then
+            [ -n "$live_ipaddr" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" IPADDR "$live_ipaddr" 2>/dev/null || true; }
+            [ -n "$live_netmask" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" NETMASK "$live_netmask" 2>/dev/null || true; }
+        else
+            # DHCP (or unset) - any leftover static fields from a prior config are stale
+            sed -i '/^IPADDR=/d;/^NETMASK=/d' "$ethcfg" 2>/dev/null || true
+        fi
+    fi
+
     rm -f "$ovscfg"
 
     if [ "$ethcfg_existed" = "yes" ]; then
@@ -311,6 +337,17 @@ inject_and_bind() {
         for iface in $ifaces; do
             create_ovs_bridge_for "$iface"
         done
+
+        # Send DSM notification
+        case "${vendor_hex}:${device_hex}" in
+            1D6A:07B1|1D6A:D107) card_name="Aquantia AQC107" ;;
+            1D6A:08B1)           card_name="Aquantia AQC108" ;;
+            1D6A:00B1)           card_name="Aquantia AQC100" ;;
+            1D6A:04C0|1D6A:14C0) card_name="Aquantia AQC113/AQC113C" ;;
+            *)                   card_name="Aquantia device (${vendor_hex}:${device_hex})" ;;
+        esac
+        #synodsmnotify -c SYNO.SDS._ThirdParty.App.AQC_Unlock @users AQC_Unlock:common:title AQC_Unlock:common:loaded "$card"
+        #synodsmnotify -c SYNO.SDS._ThirdParty.App.dsm_notify @administrators "dsm_notify:app1:${title_key}" "dsm_notify:app1:${msg_key}"
     done
 
     if [ "$found_any" -eq 0 ]; then
