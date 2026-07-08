@@ -9,7 +9,7 @@
 
 ### Description
 
-DSM 7 package that allows you to use non-Synology 10GbE PCIe network cards that have a Marvell (Aquantia) AQC107, AQC113 or AQC113C chip.
+DSM 7 package that allows you to use non-Synology 10GbE, 5GbE and 2.5GbE PCIe network cards that have a Marvell (Aquantia) AQC100, AQC107, AQC108, AQC111, AQC112, AQC113/AQC113C and AQC115 chip
 
 ### How to install the package
 

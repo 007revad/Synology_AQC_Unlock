@@ -1,0 +1,24 @@
+{
+  "aqc_unlock.js": {
+    "SYNO.SDS._ThirdParty.App.AQC_Unlock": {
+      "type": "app",
+      "title": "AQC Unlock",
+      "desc": "DSM 7 package that allows you to use non-Synology 10GbE PCIe network cards that have a Marvell (Aquantia) AQC107, AQC113 or AQC113C chip and set your preferred LAN port order for DSM to connect to other devices.",
+      "icon": "images/icon_{0}.png",
+      "appWindow": "SYNO.SDS.AQC_Unlock.MainWindow",
+      "allowMultiInstance": false,
+      "allowStandalone": true,
+      "allUsers": true,
+      "texts": "texts",
+      "preloadTexts": [
+        "common:title",
+        "common:loaded"
+      ]
+    },
+    "SYNO.SDS.AQC_Unlock.MainWindow": {
+      "type": "lib",
+      "title": "DSM Notify",
+      "icon": "images/icon_{0}.png"
+    }
+  }
+}

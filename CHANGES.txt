@@ -1,2 +1,7 @@
+v1.0.2
+- Added a DSM desktop notification that the AQC network card was loaded.
+- Added window to set your preferred LAN port order for DSM to connect to other devices.
+- Now hides Stop button in Package Center. If you stopped the package your network card would not load when you reboot the Synology.
+
 v1.0.1
 - First release.

@@ -1,10 +1,11 @@
 {
   "package": "AQC_Unlock",
   "name": "AQC_Unlock",
-  "version": "1.0.1",
-  "description": "DSM 7 package that allows you to use non-Synology 10GbE PCIe network cards that have a Marvell (Aquantia) AQC107, AQC113 or AQC113C chip",
+  "version": "1.0.2",
+  "description": "DSM 7 package that allows you to use non-Synology 10GbE, 5GbE and 2.5GbE PCIe network cards that have a Marvell (Aquantia) AQC100, AQC107, AQC108, AQC111, AQC112, AQC113/AQC113C/AQC113CS and AQC115 chip, and set your preferred LAN port order for DSM to connect to other devices.",
   "target": "./src",
   "install_type": "package",
+  "ctl_stop": "no",
   "support_conf_folder": "yes",
   "synology": {
     "maintainer": "007revad",
@@ -14,7 +15,7 @@
     "support_url": "https://github.com/007revad/Synology_AQC_Unlock/issues",
     "os_min_ver": "7.0-40000",
     "os_max_ver": "9.9-99999",
-    "arch": "x86_64",
+    "arch": "avoton broadwell broadwellnk broadwellnkv2 broadwellntbap bromolow denverton epyc7002 epyc7003 grantley icelaked purley r1000 r1000nk v1000 v1000nk",
     "displayname": "AQC Unlock",
     "dsmappname": "SYNO.SDS._ThirdParty.App.AQC_Unlock",
     "dsmuidir": "ui",

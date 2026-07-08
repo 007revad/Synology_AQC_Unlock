@@ -21,6 +21,10 @@ MODINFO_LINK="${VAR_DIR}/modinfo"
 
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE" 2>/dev/null || true
+    # The package's own var/ directory is deleted on uninstall, so also mirror
+    # every line to the system log - this is the only copy that survives it,
+    # and it's how you'd confirm the uninstall teardown actually completed.
+    logger -t AQC_Unlock "$1" 2>/dev/null || true
 }
 
 log_identity() {
@@ -276,21 +280,63 @@ inject_and_bind() {
         [ "$vendor" = "$AQUANTIA_VENDOR" ] || continue
         found_any=1
 
-        # Already claimed by a driver (e.g. a genuine Synology-branded card, or already
-        # injected by a previous run of this script) - leave alone, but log it so a
-        # no-op run is distinguishable from the script never having run at all.
-        if [ -e "${dev}driver" ]; then
-            existing_driver=$(basename "$(readlink "${dev}driver")" 2>/dev/null || echo "unknown")
-            log_message "${dev} already bound to ${existing_driver}, skipping"
-            continue
-        fi
-
         device=$(cat "${dev}device" 2>/dev/null || true)
         [ -n "$device" ] || continue
 
         vendor_hex=$(echo "${vendor#0x}" | tr 'a-f' 'A-F')
         device_hex=$(echo "${device#0x}" | tr 'a-f' 'A-F')
         target_id="${vendor_hex}:${device_hex}"
+
+        # Already claimed by a driver - either a genuine Synology-branded card
+        # (leave alone), or this device was already injected & bound by an
+        # earlier run of this script (status/injections state gets wiped on
+        # every start, so it must be reconciled here or `status` will never
+        # see this device again and DSM will mark the package Manually Stopped
+        # even though the card is up and working).
+        if [ -e "${dev}driver" ]; then
+            existing_driver=$(basename "$(readlink "${dev}driver")" 2>/dev/null || echo "unknown")
+
+            is_ours=0
+            for mod in $ATLANTIC_MODULES; do
+                [ "$(basename "$mod" .ko)" = "$existing_driver" ] && is_ours=1 && break
+            done
+
+            if [ "$is_ours" -eq 0 ]; then
+                log_message "${dev} already bound to ${existing_driver}, skipping"
+                continue
+            fi
+
+            log_message "${dev} already bound to ${existing_driver} from a previous run, reconciling state"
+
+            ifaces=$(wait_for_iface "$dev" || true)
+            if [ -z "$ifaces" ]; then
+                log_message "${dev} bound to ${existing_driver} but no net interface found, cannot reconcile"
+                continue
+            fi
+
+            vendor_lc=$(echo "$vendor_hex" | tr 'A-F' 'a-f')
+            device_lc=$(echo "$device_hex" | tr 'A-F' 'a-f')
+            bdf=$(basename "$dev")
+            iface_list=$(echo "$ifaces" | tr '\n' ' ' | sed 's/ *$//')
+            echo "${bdf}|${existing_driver}|${vendor_lc}|${device_lc}|${iface_list}" >> "${STATE_DIR}/injections"
+
+            for iface in $ifaces; do
+                bridge="ovs_${iface}"
+                if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+                    ethcfg="${NETSCRIPTS_DIR}/ifcfg-${iface}"
+                    bootproto=$(get_ifcfg_value "$ethcfg" "BOOTPROTO")
+                    [ -n "$bootproto" ] || bootproto="dhcp"
+                    # This run didn't create ifcfg-<iface>, so mark it as
+                    # pre-existing - otherwise a later uninstall would delete
+                    # a file we never created.
+                    echo "${iface}|${bridge}|${bootproto}|yes" >> "${STATE_DIR}/ovs_bridges"
+                    log_message "${bridge} already exists for ${iface}, recorded for status/teardown tracking"
+                else
+                    create_ovs_bridge_for "$iface"
+                fi
+            done
+            continue
+        fi
 
         matched_module=""
         for mod in $ATLANTIC_MODULES; do
@@ -340,14 +386,23 @@ inject_and_bind() {
 
         # Send DSM notification
         case "${vendor_hex}:${device_hex}" in
-            1D6A:07B1|1D6A:D107) card_name="Aquantia AQC107" ;;
-            1D6A:08B1)           card_name="Aquantia AQC108" ;;
-            1D6A:00B1)           card_name="Aquantia AQC100" ;;
-            1D6A:04C0|1D6A:14C0) card_name="Aquantia AQC113/AQC113C" ;;
-            *)                   card_name="Aquantia device (${vendor_hex}:${device_hex})" ;;
+            1D6A:00B1)                      card_name="Aquantia AQC100 10G" ;;
+            1D6A:07B1|1D6A:D107)            card_name="Aquantia AQC107 10G" ;;
+            1D6A:08B1|1D6A:00B1|1D6A:D108)  card_name="Aquantia AQC108 5G" ;;
+
+            1D6A:11B1)                      card_name="Aquantia AQC111 5G" ;;
+            1D6A:12B1)                      card_name="Aquantia AQC112 2.5G" ;;
+
+            1D6A:04C0)                      card_name="Aquantia AQC113 10G" ;;
+            1D6A:14C0)                      card_name="Aquantia AQC113C 10G" ;;
+            1D6A:94C0)                      card_name="Aquantia AQC113CS 10G" ;;
+
+            1D6A:12C0)                      card_name="Aquantia AQC115/AQC115C 2.5G" ;;
+            #1D6A:016A)                      card_name="FastLinQ Edge AQC116 1G" ;;  # Not used in PCIe cards
+
+            *)                              card_name="Aquantia device (${vendor_hex}:${device_hex})" ;;
         esac
-        #synodsmnotify -c SYNO.SDS._ThirdParty.App.AQC_Unlock @users AQC_Unlock:common:title AQC_Unlock:common:loaded "$card"
-        #synodsmnotify -c SYNO.SDS._ThirdParty.App.dsm_notify @administrators "dsm_notify:app1:${title_key}" "dsm_notify:app1:${msg_key}"
+        synodsmnotify -c SYNO.SDS._ThirdParty.App.AQC_Unlock @users AQC_Unlock:common:title AQC_Unlock:common:loaded "$card_name"
     done
 
     if [ "$found_any" -eq 0 ]; then
@@ -405,7 +460,21 @@ case "$1" in
         exit 0
         ;;
     stop)
+        # Deliberately a no-op: new_id injection does NOT survive a reboot, and
+        # DSM only auto-restarts a package at boot if it was still running at
+        # shutdown. If stop tore everything down, clicking Stop (or the package
+        # simply not being running across an unexpected reboot) would leave a
+        # user whose only network path is this 10G port unable to reach the NAS
+        # at all. Full teardown only happens via the 'uninstall' action, called
+        # from preuninstall, where removing the interface entirely is correct.
+        log_message "Stop requested - leaving injected interface(s) active (full teardown only happens on package uninstall)"
+        exit 0
+        ;;
+    uninstall)
+        log_identity
+        cp "$LOG_FILE" "/tmp/AQC_Unlock-uninstall-$(date +%Y%m%d-%H%M%S).log" 2>/dev/null || true
         stop_managed_ifaces
+        log_message "Uninstall teardown complete - a copy of the log up to this point was saved under /tmp/AQC_Unlock-uninstall-*.log (the system log via 'logger -t AQC_Unlock' also has every line, including this teardown, and survives after /tmp is cleared on reboot)"
         exit 0
         ;;
     status)

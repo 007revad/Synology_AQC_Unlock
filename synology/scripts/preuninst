@@ -1,3 +1,9 @@
 #!/bin/sh
 
-exit 0
+set -eu
+
+# Fully reverse everything this package injected (OVS bridges, ifcfg files,
+# new_id/driver binding) before the package's own files are removed. Regular
+# Stop is a deliberate no-op (see start-stop-status-root), so this is the only
+# place a full teardown happens.
+exec sudo -n /var/packages/AQC_Unlock/scripts/start-stop-status-root uninstall
