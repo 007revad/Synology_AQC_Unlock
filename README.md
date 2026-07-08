@@ -31,9 +31,19 @@ There are 2 ways to install the package:
 ### Screenshots
 
 <!--- <p align="center">Description of image 1 goes here</p> --->
-<p align="center"><kbd><img src="/images/installed.png"></kbd></p>
+<!--- <p align="center"><kbd><img src="/images/installed.png"></kbd></p> --->
+
+<!--- <br> --->
+
+<p align="center">Installed with AQC107 10GbE card working</p>
+<p align="center"><kbd><img src="/images/running.png"></kbd></p>
 
 <br>
 
-<!--- <p align="center">Description of image 2 goes here</p> --->
-<p align="center"><kbd><img src="/images/running.png"></kbd></p>
+<p align="center">DSM Notification</p>
+<p align="center"><kbd><img src="/images/dsm_notification2.png"></kbd></p>
+
+<br>
+
+<p align="center">Outgoing connection priority settings</p>
+<p align="center"><kbd><img src="/images/window.png"></kbd></p>
