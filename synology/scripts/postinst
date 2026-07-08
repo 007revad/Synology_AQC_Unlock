@@ -11,4 +11,8 @@ rm -f "$UI_DIR/Makefile"
 rm -f "$UI_DIR/ui"         # self-referencing symlink
 rm -f "$TEXTS_DIR/strings" # strings file template
 
+# Make scripts and CGI executable
+chmod 755 "$UI_DIR/api.cgi"
+chmod 755 "$UI_DIR/aqc_unlock.js"
+
 exit 0

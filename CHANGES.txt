@@ -1,3 +1,6 @@
+v1.0.3
+- Bug fix for the installer not setting the required files as executable for the popup window (caused 502 error).
+
 v1.0.2
 - Added a DSM desktop notification that the AQC network card was loaded.
 - Added window to set your preferred LAN port order for DSM to connect to other devices.
