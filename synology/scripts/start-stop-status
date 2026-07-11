@@ -4,6 +4,15 @@ set -u
 
 ROOT_SCRIPT="/var/packages/AQC_Unlock/scripts/start-stop-status-root"
 DEGRADED_MARKER="/var/packages/AQC_Unlock/var/state/no_sudo_degraded"
+LOG_FILE="/var/packages/AQC_Unlock/var/aquantia.log"
+
+# aquantia.log is owned by AQC_Unlock (confirmed via ls -l), not root, so the
+# wrapper can write here directly even though it never got as far as sudo
+# succeeding - gives one unified timeline instead of splitting the "sudo was
+# denied" story across just the DSM popup and /tmp.
+log_message() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE" 2>/dev/null || true
+}
 
 write_permission_message() {
     if [ -z "${SYNOPKG_TEMP_LOGFILE:-}" ]; then
@@ -36,6 +45,7 @@ if echo "$_output" | grep -q "a password is required"; then
 
     case "${1:-}" in
         start)
+            log_message "sudo denied (${1:-}) - sudoers permission missing, degrading gracefully"
             write_permission_message
             # Report success to DSM rather than tripping the install/start
             # failure -> "Repair" flow. The popup carries the real information;
@@ -43,12 +53,15 @@ if echo "$_output" | grep -q "a password is required"; then
             exit 0
             ;;
         stop)
+            log_message "sudo denied (stop) - nothing was actually running, nothing to stop"
             # Nothing was ever actually started - nothing to stop.
             exit 0
             ;;
         status)
             # Match what 'start' just reported, so DSM doesn't immediately flip
             # back to "stopped"/broken on its next status poll.
+            # Deliberately not logged - status gets polled frequently and
+            # would flood the log with repeats of the same fact.
             exit 0
             ;;
         *)

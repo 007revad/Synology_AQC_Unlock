@@ -1,3 +1,9 @@
+v1.0.6
+- Now shows warning after starting if permissions aren't set.
+- Open button now shows steps to set permissions if they aren't set.
+- Added start, stop logging when permissions aren't set.
+- Bug fix for not being able to start, repair or upgrade package if permissions aren't set.
+
 v1.0.5
 - Now shows warning after starting if permissions aren't set.
 - Open button now shows steps to set permissions if they aren't set.

@@ -1,7 +1,7 @@
 {
   "package": "AQC_Unlock",
   "name": "AQC_Unlock",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "DSM 7 package that allows you to use non-Synology 10GbE, 5GbE and 2.5GbE PCIe network cards that have a Marvell (Aquantia) AQC100, AQC107, AQC108, AQC111, AQC112, AQC113/AQC113C/AQC113CS and AQC115 chip, and set your preferred LAN port order for DSM to connect to other devices.",
   "target": "./src",
   "install_type": "package",
