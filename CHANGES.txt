@@ -1,3 +1,7 @@
+v1.0.4 Beta
+- Now shows warning after starting if permissions aren't set.
+- Open button now shows steps to set permissions if they aren't set.
+
 v1.0.3
 - Bug fix for the installer not setting the required files as executable for the popup window (caused 502 error).
 

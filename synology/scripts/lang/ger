@@ -1,0 +1,1 @@
+PKG_SUDOERS_MISSING=AQC\ Unlock\ wurde\ gestartet\,\ aber\ die\ sudoers-Berechtigung\ fehlt\ -\ die\ Netzwerkkarte\ ist\ noch\ nicht\ freigeschaltet.\ Anleitung\:\ https\://github.com/007revad/Synology_AQC_Unlock/blob/main/set_package_permissions.md\ -\ AQC\ Unlock\ anschliessend\ im\ Paket-Zentrum\ neu\ starten.

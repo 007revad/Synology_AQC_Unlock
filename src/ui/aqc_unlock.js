@@ -59,11 +59,13 @@ Ext.define("SYNO.SDS.AQC_Unlock.MainWindow", {
     // clashing with anything else DSM has in the DOM.
     bodyHtml:
         '<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;height:100%;display:flex;flex-direction:column;box-sizing:border-box;padding:20px;">' +
-            '<p style="margin:0 0 14px 0;">Set your preferred LAN port order for DSM to connect to other devices.</p>' +
-            '<p style="margin:0 0 14px 0;color:#777;font-size:12px;">Drag to reorder. The top port is preferred when a client can be reached on more than one port.</p>' +
+            '<div id="aqc-intro">' +
+                '<p style="margin:0 0 14px 0;">Set your preferred LAN port order for DSM to connect to other devices.</p>' +
+                '<p style="margin:0 0 14px 0;color:#777;font-size:12px;">Drag to reorder. The top port is preferred when a client can be reached on more than one port.</p>' +
+            '</div>' +
             '<div id="aqc-lan-list" style="flex:1;overflow-y:auto;border:1px solid #ddd;border-radius:4px;background:#fafafa;"></div>' +
             '<div id="aqc-lan-status" style="min-height:18px;margin-top:8px;font-size:12px;color:#c00;"></div>' +
-            '<div style="margin-top:14px;text-align:right;">' +
+            '<div id="aqc-button-row" style="margin-top:14px;text-align:right;">' +
                 '<button id="aqc-btn-cancel" type="button" style="min-width:80px;padding:6px 14px;margin-right:8px;border:1px solid #ccc;border-radius:3px;background:#fff;cursor:pointer;">Cancel</button>' +
                 '<button id="aqc-btn-save" type="button" style="min-width:80px;padding:6px 14px;border:1px solid #2b6cb0;border-radius:3px;background:#2b6cb0;color:#fff;cursor:pointer;">Save</button>' +
             '</div>' +
@@ -79,13 +81,100 @@ Ext.define("SYNO.SDS.AQC_Unlock.MainWindow", {
         cancelBtn.addEventListener("click", this.onCancel.createDelegate(this));
         saveBtn.addEventListener("click", this.onSave.createDelegate(this));
 
-        this.loadInterfaces();
+        this.checkStatus();
+    },
+
+    // Checked first, before the LAN list: while sudoers isn't set up, no
+    // interface has actually been injected/bridged, so the reorder list
+    // would just be empty/misleading. Shows real setup instructions instead -
+    // this window isn't subject to DSM's own popup copy/link restriction,
+    // so an actual clickable, selectable link works fine here.
+    checkStatus: function() {
+        this.listEl.innerHTML = '<div style="padding:14px;color:#888;">Loading...</div>';
+
+        var self = this;
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", AQC_API_BASE + "?action=get_status&_ts=" + Date.now(), true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4) {
+                return;
+            }
+            var sudoOk = true; // fail open - don't block the real UI on a status-check hiccup
+            if (xhr.status === 200) {
+                try {
+                    var data = JSON.parse(xhr.responseText);
+                    if (data && data.sudo_ok === false) {
+                        sudoOk = false;
+                    }
+                } catch (e) {
+                    // leave sudoOk = true, fall through to the normal list
+                }
+            }
+            if (sudoOk) {
+                self.loadInterfaces();
+            } else {
+                self.showSudoInstructions();
+            }
+        };
+        xhr.onerror = function() {
+            self.loadInterfaces();
+        };
+        xhr.send();
+    },
+
+    showSudoInstructions: function() {
+        var setupUrl = "https://github.com/007revad/Synology_AQC_Unlock/blob/main/set_package_permissions.md";
+
+        var introEl = document.getElementById("aqc-intro");
+        if (introEl) {
+            introEl.style.display = "none";
+        }
+        var buttonRowEl = document.getElementById("aqc-button-row");
+        if (buttonRowEl) {
+            buttonRowEl.style.display = "none";
+        }
+
+        this.statusEl.textContent = "";
+        this.listEl.innerHTML =
+            '<div style="padding:16px;">' +
+                '<p style="margin:0 0 12px 0;color:#c00;font-weight:bold;">Setup needed</p>' +
+                '<p style="margin:0 0 12px 0;">' +
+                    'AQC Unlock is running, but the sudoers permission it needs hasn\u2019t been set up yet, ' +
+                    'so no network card has been unlocked.' +
+                '</p>' +
+                '<p style="margin:0 0 12px 0;">Run this over SSH as an administrator:</p>' +
+                '<pre style="background:#f5f5f5;border:1px solid #ddd;border-radius:4px;padding:10px;' +
+                    'font-size:12px;white-space:pre-wrap;word-break:break-all;user-select:text;">' +
+                    'echo "AQC_Unlock ALL=(root) NOPASSWD: /var/packages/AQC_Unlock/scripts/start-stop-status-root" | sudo tee /etc/sudoers.d/AQC_Unlock\n' +
+                    'sudo chmod 440 /etc/sudoers.d/AQC_Unlock' +
+                '</pre>' +
+                '<p style="margin:12px 0;">Then restart AQC Unlock in Package Center.</p>' +
+                '<p style="margin:0 0 12px 0;">Full instructions: ' +
+                    '<a href="' + setupUrl + '" target="_blank" rel="noopener">' + setupUrl + '</a>' +
+                '</p>' +
+                '<button id="aqc-btn-recheck" type="button" style="padding:6px 14px;border:1px solid #ccc;' +
+                    'border-radius:3px;background:#fff;cursor:pointer;">Check again</button>' +
+            '</div>';
+
+        var self = this;
+        document.getElementById("aqc-btn-recheck").addEventListener("click", function() {
+            self.checkStatus();
+        });
     },
 
     // Fetches the real port list + saved order from api.cgi. Falls back to
     // an empty list with a visible error rather than silently showing
     // nothing if the request fails.
     loadInterfaces: function() {
+        var introEl = document.getElementById("aqc-intro");
+        if (introEl) {
+            introEl.style.display = "";
+        }
+        var buttonRowEl = document.getElementById("aqc-button-row");
+        if (buttonRowEl) {
+            buttonRowEl.style.display = "";
+        }
+
         this.listEl.innerHTML = '<div style="padding:14px;color:#888;">Loading...</div>';
         this.statusEl.textContent = "";
 

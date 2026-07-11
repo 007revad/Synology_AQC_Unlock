@@ -1,0 +1,1 @@
+PKG_SUDOERS_MISSING=AQC\ Unlock\ 已启动，但缺少\ sudoers\ 权限，网卡尚未解锁。设置说明\:\ https\://github.com/007revad/Synology_AQC_Unlock/blob/main/set_package_permissions.md\ 完成后请在套件中心重新启动\ AQC\ Unlock。

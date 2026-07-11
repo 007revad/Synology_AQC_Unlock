@@ -33,6 +33,57 @@ if [[ "${QUERY_STRING:-}" =~ (^|&)action=([^&]*) ]]; then
 fi
 
 #---------------------------------------------------------------------------
+# action=get_status
+# Reports whether AQC_Unlock is running in the degraded no-sudo state (see
+# start-stop-status). While degraded, no interface has actually been
+# injected/bridged, so the LAN reorder list has nothing real to show -
+# aqc_unlock.js uses this to show setup instructions instead.
+#
+# Output: {"sudo_ok":true} or {"sudo_ok":false}
+#---------------------------------------------------------------------------
+if [[ "$_action" == "get_status" ]]; then
+    printf 'Content-Type: application/json\r\n'
+    printf 'Cache-Control: no-store\r\n'
+    printf '\r\n'
+
+    # Testing "sudo -n true" is wrong: the sudoers rule authorizes one exact
+    # command path, not an arbitrary proxy like "true", so that check can
+    # fail even when the real rule is correct. Test the actual authorized
+    # command instead - "status" is read-only/harmless. sudo -n denies with
+    # "a password is required" on stderr *before* ever running the target;
+    # if we see that, it's a real auth failure regardless of exit code. Any
+    # other outcome means sudo let the real command run, whatever it returned.
+    _sudo_out=$(sudo -n /var/packages/AQC_Unlock/scripts/start-stop-status-root status 2>&1)
+
+    if echo "$_sudo_out" | grep -q "a password is required"; then
+        printf '{"sudo_ok":false}\n'
+    else
+        printf '{"sudo_ok":true}\n'
+    fi
+    exit 0
+fi
+
+#---------------------------------------------------------------------------
+# action=debug_sudo (temporary - for diagnosing the get_status discrepancy)
+# Reports exactly what this CGI process sees: PATH, where sudo resolves to,
+# and the real output/exit code of sudo -n true from inside this context.
+#---------------------------------------------------------------------------
+if [[ "$_action" == "debug_sudo" ]]; then
+    printf 'Content-Type: application/json\r\n'
+    printf 'Cache-Control: no-store\r\n'
+    printf '\r\n'
+
+    _whoami=$(whoami 2>&1)
+    _sudo_path=$(command -v sudo 2>&1)
+    _sudo_output=$(sudo -n true 2>&1)
+    _sudo_exit=$?
+
+    printf '{"whoami":"%s","path":"%s","sudo_path":"%s","sudo_output":"%s","sudo_exit":%s}\n' \
+        "$_whoami" "${PATH//\"/}" "$_sudo_path" "${_sudo_output//\"/}" "$_sudo_exit"
+    exit 0
+fi
+
+#---------------------------------------------------------------------------
 # action=get_lan_ports
 # Enumerates real physical LAN ports (eth0, eth1, ...), maps each to DSM's
 # "LAN N" label (confirmed mapping: ethN -> LAN(N+1)), and reports the

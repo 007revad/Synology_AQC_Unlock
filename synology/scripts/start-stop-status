@@ -1,10 +1,69 @@
 #!/bin/sh
 
-set -eu
+set -u
 
-# Package Center invokes this script as the restricted package user, which has
-# no permission to write to the sysfs paths this package needs (new_id, unbind,
-# remove_id, disable_ipv6) or to bring up interfaces / run dhclient. Rather than
-# sprinkling sudo through every privileged line, hand off entirely to the real
-# logic script running as root via a scoped, NOPASSWD sudoers entry.
-exec sudo -n /var/packages/AQC_Unlock/scripts/start-stop-status-root "$@"
+ROOT_SCRIPT="/var/packages/AQC_Unlock/scripts/start-stop-status-root"
+DEGRADED_MARKER="/var/packages/AQC_Unlock/var/state/no_sudo_degraded"
+
+write_permission_message() {
+    if [ -z "${SYNOPKG_TEMP_LOGFILE:-}" ]; then
+        return 0
+    fi
+
+    script_dir=$(/usr/bin/dirname "$0")
+    if [ -f "${script_dir}/lang/${SYNOPKG_DSM_LANGUAGE:-enu}" ]; then
+        . "${script_dir}/lang/${SYNOPKG_DSM_LANGUAGE:-enu}"
+    else
+        . "${script_dir}/lang/enu"
+    fi
+
+    echo "${PKG_SUDOERS_MISSING}" > "$SYNOPKG_TEMP_LOGFILE"
+}
+
+# Attempt the real, actual authorized command directly - testing a proxy
+# command (e.g. "sudo -n true") is wrong, since the sudoers rule authorizes
+# this exact command path only, not arbitrary commands, so a proxy check can
+# report failure even when the real rule is correct. sudo -n prints
+# "a password is required" on stderr and refuses to run the target at all
+# when the rule doesn't match; any other outcome means sudo let the real
+# command execute, whatever exit code it returned.
+_output=$(sudo -n "$ROOT_SCRIPT" "$@" 2>&1)
+_status=$?
+
+if echo "$_output" | grep -q "a password is required"; then
+    mkdir -p "$(dirname "$DEGRADED_MARKER")" 2>/dev/null || true
+    touch "$DEGRADED_MARKER" 2>/dev/null || true
+
+    case "${1:-}" in
+        start)
+            write_permission_message
+            # Report success to DSM rather than tripping the install/start
+            # failure -> "Repair" flow. The popup carries the real information;
+            # nothing privileged has actually run yet.
+            exit 0
+            ;;
+        stop)
+            # Nothing was ever actually started - nothing to stop.
+            exit 0
+            ;;
+        status)
+            # Match what 'start' just reported, so DSM doesn't immediately flip
+            # back to "stopped"/broken on its next status poll.
+            exit 0
+            ;;
+        *)
+            exit 0
+            ;;
+    esac
+fi
+
+# Sudo actually ran the real command - clear any stale degraded marker and
+# any stale message from a previous failed start, then pass through the
+# real command's own output and exit code. (DSM's own startFailed marker is
+# cleared inside start-stop-status-root itself, since it needs root.)
+rm -f "$DEGRADED_MARKER" 2>/dev/null || true
+if [ -n "${SYNOPKG_TEMP_LOGFILE:-}" ]; then
+    : > "$SYNOPKG_TEMP_LOGFILE" 2>/dev/null || true
+fi
+[ -n "$_output" ] && echo "$_output"
+exit "$_status"
