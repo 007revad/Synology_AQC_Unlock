@@ -47,3 +47,8 @@ There are 2 ways to install the package:
 
 <p align="center">Outgoing connection priority settings</p>
 <p align="center"><kbd><img src="/images/window.png"></kbd></p>
+
+<br>
+
+<p align="center">tp-link TX401 10GbE</p>
+<p align="center"><kbd><img src="/images/tp-link.png"></kbd></p>
