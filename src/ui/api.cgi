@@ -64,26 +64,6 @@ if [[ "$_action" == "get_status" ]]; then
 fi
 
 #---------------------------------------------------------------------------
-# action=debug_sudo (temporary - for diagnosing the get_status discrepancy)
-# Reports exactly what this CGI process sees: PATH, where sudo resolves to,
-# and the real output/exit code of sudo -n true from inside this context.
-#---------------------------------------------------------------------------
-if [[ "$_action" == "debug_sudo" ]]; then
-    printf 'Content-Type: application/json\r\n'
-    printf 'Cache-Control: no-store\r\n'
-    printf '\r\n'
-
-    _whoami=$(whoami 2>&1)
-    _sudo_path=$(command -v sudo 2>&1)
-    _sudo_output=$(sudo -n true 2>&1)
-    _sudo_exit=$?
-
-    printf '{"whoami":"%s","path":"%s","sudo_path":"%s","sudo_output":"%s","sudo_exit":%s}\n' \
-        "$_whoami" "${PATH//\"/}" "$_sudo_path" "${_sudo_output//\"/}" "$_sudo_exit"
-    exit 0
-fi
-
-#---------------------------------------------------------------------------
 # action=get_lan_ports
 # Enumerates real physical LAN ports (eth0, eth1, ...), maps each to DSM's
 # "LAN N" label (confirmed mapping: ethN -> LAN(N+1)), and reports the

@@ -2,8 +2,32 @@
 
 set -eu
 
+# DSM automatically captures this script's stdout/stderr into
+# /var/log/packages/AQC_Unlock.log (confirmed: it already did this for the
+# old wrapper's "sudo: a password is required" output, with no logging code
+# of our own involved) - plain echo/stderr here is all that's needed, no
+# custom log-file handling required.
+echo "preuninst invoked as: $(id 2>&1)"
+
 # Fully reverse everything this package injected (OVS bridges, ifcfg files,
 # new_id/driver binding) before the package's own files are removed. Regular
 # Stop is a deliberate no-op (see start-stop-status-root), so this is the only
 # place a full teardown happens.
-exec sudo -n /var/packages/AQC_Unlock/scripts/start-stop-status-root uninstall
+set +e
+sudo -n /var/packages/AQC_Unlock/scripts/start-stop-status-root uninstall
+status=$?
+set -e
+
+if [ "$status" -eq 0 ]; then
+    echo "preuninst: teardown completed successfully"
+else
+    # Don't block the uninstall/upgrade on a failed teardown (e.g. sudoers
+    # missing) - a user needs to be able to remove a broken package no
+    # matter what state it's in. Any injected interface/OVS bridge is left
+    # running as-is (same as a normal Stop), and since new_id injection
+    # doesn't survive a reboot, it'll disappear on its own next reboot
+    # regardless, with nothing left to re-inject it once this package is gone.
+    echo "preuninst: teardown failed (exit ${status}), proceeding with uninstall anyway"
+fi
+
+exit 0
