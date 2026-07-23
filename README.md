@@ -11,6 +11,10 @@
 
 DSM 7 package that allows you to use non-Synology 10GbE, 5GbE and 2.5GbE PCIe network cards that have a Marvell (Aquantia) AQC100, AQC107, AQC108, AQC111, AQC112, AQC113/AQC113C and AQC115 chip and set your preferred LAN port order for DSM to connect to other devices.
 
+### Virtual Machine Manager
+
+If you have Virtual Machine Manager (aka VMM) running when you first install AQC Unlock you may need to stop and then run VMM before the new LAN port shows up in VMM. 
+
 ### How to install the package
 
 There are 2 ways to install the package:
