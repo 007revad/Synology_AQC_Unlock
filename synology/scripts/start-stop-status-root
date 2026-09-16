@@ -348,6 +348,16 @@ inject_and_bind() {
             fi
         done
 
+        # Fallback for generic AQC107/AQC107S (87B1) not listed in Synology's stripped alias table
+        if [ -z "$matched_module" ] && [ "$device_hex" = "87B1" ]; then
+            for mod in $ATLANTIC_MODULES; do
+                if [ -f "$mod" ] && [ "$(basename "$mod" .ko)" = "atlantic" ]; then
+                    matched_module="atlantic"
+                    break
+                fi
+            done
+        fi
+
         if [ -z "$matched_module" ]; then
             log_message "No known atlantic module claims ${vendor}:${device} at ${dev}, skipping"
             continue
@@ -388,7 +398,7 @@ inject_and_bind() {
         # Send DSM notification
         case "${vendor_hex}:${device_hex}" in
             1D6A:00B1)                      card_name="Aquantia AQC100 10G" ;;
-            1D6A:07B1|1D6A:D107)            card_name="Aquantia AQC107 10G" ;;
+            1D6A:07B1|1D6A:87B1|1D6A:D107)  card_name="Aquantia AQC107 10G" ;;
             1D6A:08B1|1D6A:00B1|1D6A:D108)  card_name="Aquantia AQC108 5G" ;;
 
             1D6A:11B1)                      card_name="Aquantia AQC111 5G" ;;
