@@ -146,14 +146,7 @@ Ext.define("SYNO.SDS.AQC_Unlock.MainWindow", {
                     'If this keeps happening, please report it at ' +
                     '<a href="' + issuesUrl + '" target="_blank" rel="noopener">' + issuesUrl + '</a>' +
                 '</p>' +
-                '<button id="aqc-btn-recheck" type="button" style="padding:6px 14px;border:1px solid #ccc;' +
-                    'border-radius:3px;background:#fff;cursor:pointer;">Check again</button>' +
             '</div>';
-
-        var self = this;
-        document.getElementById("aqc-btn-recheck").addEventListener("click", function() {
-            self.checkStatus();
-        });
     },
 
     // Fetches the real port list + saved order from api.cgi. Falls back to
