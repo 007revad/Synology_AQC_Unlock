@@ -34,32 +34,29 @@ fi
 
 #---------------------------------------------------------------------------
 # action=get_status
-# Reports whether AQC_Unlock is running in the degraded no-sudo state (see
-# start-stop-status). While degraded, no interface has actually been
+# Reports whether the setuid helper (bin/helper/aqcunlock-helper) works. If
+# it doesn't (see start-stop-status), no interface has actually been
 # injected/bridged, so the LAN reorder list has nothing real to show -
-# aqc_unlock.js uses this to show setup instructions instead.
+# aqc_unlock.js uses this to show a "helper not active" message instead.
 #
-# Output: {"sudo_ok":true} or {"sudo_ok":false}
+# Output: {"helper_ok":true} or {"helper_ok":false}
 #---------------------------------------------------------------------------
 if [[ "$_action" == "get_status" ]]; then
     printf 'Content-Type: application/json\r\n'
     printf 'Cache-Control: no-store\r\n'
     printf '\r\n'
 
-    # Testing "sudo -n true" is wrong: the sudoers rule authorizes one exact
-    # command path, not an arbitrary proxy like "true", so that check can
-    # fail even when the real rule is correct. Test the actual authorized
-    # command instead - "status" is read-only/harmless. sudo -n denies with
-    # "a password is required" on stderr *before* ever running the target;
-    # if we see that, it's a real auth failure regardless of exit code. Any
-    # other outcome means sudo let the real command run, whatever it returned.
-    _sudo_out=$(sudo -n /var/packages/AQC_Unlock/scripts/start-stop-status-root status 2>&1)
+    # "status" is read-only. start-stop-status-root's status only ever exits
+    # 0 (running) or 3 (not running); anything else means the helper itself
+    # failed (1 = refused / could not become root, 126/127 = not executable
+    # or missing).
+    "${PKG_ROOT}/target/bin/helper/aqcunlock-helper" status >/dev/null 2>&1
+    _helper_rc=$?
 
-    if echo "$_sudo_out" | grep -q "a password is required"; then
-        printf '{"sudo_ok":false}\n'
-    else
-        printf '{"sudo_ok":true}\n'
-    fi
+    case "$_helper_rc" in
+        0|3) printf '{"helper_ok":true}\n' ;;
+        *)   printf '{"helper_ok":false}\n' ;;
+    esac
     exit 0
 fi
 
@@ -187,6 +184,13 @@ if [[ "$_action" == "save_lan_order" ]]; then
 
     if [[ -z "$_order" ]]; then
         printf '{"ok":false,"error":"missing order parameter"}\n'
+        exit 0
+    fi
+
+    # Only ever store a plain comma-separated list of physical interface
+    # ids - the value is written into settings.conf as-is.
+    if ! [[ "$_order" =~ ^eth[0-9]+(,eth[0-9]+)*$ ]]; then
+        printf '{"ok":false,"error":"invalid order parameter"}\n'
         exit 0
     fi
 

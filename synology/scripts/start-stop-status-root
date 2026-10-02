@@ -20,7 +20,12 @@ SYNOINFO="/etc/synoinfo.conf"
 MODINFO_LINK="${VAR_DIR}/modinfo"
 
 mkdir -p "$VAR_DIR" 2>/dev/null || true
-echo "" >> "$VAR_DIR/install.log"
+#echo "" >> "$VAR_DIR/install.log"  # adds newline for each pkg center status call!
+
+# Delete old sudoers file if it exists
+if [[ -f /etc/sudoers.d/AQC_Unlock ]]; then
+    rm /etc/sudoers.d/AQC_Unlock
+fi
 
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE" 2>/dev/null || true

@@ -1,3 +1,6 @@
+v1.1.11
+- Changed to no longer need the user to set sudoers permissions.
+
 v1.0.10
 - Bug fix for v1.0.9 failing to start.
 

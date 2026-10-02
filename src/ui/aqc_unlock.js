@@ -84,11 +84,10 @@ Ext.define("SYNO.SDS.AQC_Unlock.MainWindow", {
         this.checkStatus();
     },
 
-    // Checked first, before the LAN list: while sudoers isn't set up, no
-    // interface has actually been injected/bridged, so the reorder list
-    // would just be empty/misleading. Shows real setup instructions instead -
-    // this window isn't subject to DSM's own popup copy/link restriction,
-    // so an actual clickable, selectable link works fine here.
+    // Checked first, before the LAN list: while the setuid helper isn't
+    // working, no interface has actually been injected/bridged, so the
+    // reorder list would just be empty/misleading. Shows a "helper not
+    // active" message instead.
     checkStatus: function() {
         this.listEl.innerHTML = '<div style="padding:14px;color:#888;">Loading...</div>';
 
@@ -99,21 +98,21 @@ Ext.define("SYNO.SDS.AQC_Unlock.MainWindow", {
             if (xhr.readyState !== 4) {
                 return;
             }
-            var sudoOk = true; // fail open - don't block the real UI on a status-check hiccup
+            var helperOk = true; // fail open - don't block the real UI on a status-check hiccup
             if (xhr.status === 200) {
                 try {
                     var data = JSON.parse(xhr.responseText);
-                    if (data && data.sudo_ok === false) {
-                        sudoOk = false;
+                    if (data && data.helper_ok === false) {
+                        helperOk = false;
                     }
                 } catch (e) {
-                    // leave sudoOk = true, fall through to the normal list
+                    // leave helperOk = true, fall through to the normal list
                 }
             }
-            if (sudoOk) {
+            if (helperOk) {
                 self.loadInterfaces();
             } else {
-                self.showSudoInstructions();
+                self.showHelperMessage();
             }
         };
         xhr.onerror = function() {
@@ -122,8 +121,8 @@ Ext.define("SYNO.SDS.AQC_Unlock.MainWindow", {
         xhr.send();
     },
 
-    showSudoInstructions: function() {
-        var setupUrl = "https://github.com/007revad/Synology_AQC_Unlock/blob/main/set_package_permissions.md";
+    showHelperMessage: function() {
+        var issuesUrl = "https://github.com/007revad/Synology_AQC_Unlock/issues";
 
         var introEl = document.getElementById("aqc-intro");
         if (introEl) {
@@ -139,18 +138,13 @@ Ext.define("SYNO.SDS.AQC_Unlock.MainWindow", {
             '<div style="padding:16px;">' +
                 '<p style="margin:0 0 12px 0;color:#c00;font-weight:bold;">Setup needed</p>' +
                 '<p style="margin:0 0 12px 0;">' +
-                    'AQC Unlock is running, but the sudoers permission it needs hasn\u2019t been set up yet, ' +
+                    'AQC Unlock is installed, but its privileged helper isn\u2019t active, ' +
                     'so no network card has been unlocked.' +
                 '</p>' +
-                '<p style="margin:0 0 12px 0;">Run this over SSH as an administrator:</p>' +
-                '<pre style="background:#f5f5f5;border:1px solid #ddd;border-radius:4px;padding:10px;' +
-                    'font-size:12px;white-space:pre-wrap;word-break:break-all;user-select:text;">' +
-                    'echo "AQC_Unlock ALL=(root) NOPASSWD: /var/packages/AQC_Unlock/scripts/start-stop-status-root" | sudo tee /etc/sudoers.d/AQC_Unlock\n' +
-                    'sudo chmod 440 /etc/sudoers.d/AQC_Unlock' +
-                '</pre>' +
-                '<p style="margin:12px 0;">Then restart AQC Unlock in Package Center.</p>' +
-                '<p style="margin:0 0 12px 0;">Full instructions: ' +
-                    '<a href="' + setupUrl + '" target="_blank" rel="noopener">' + setupUrl + '</a>' +
+                '<p style="margin:0 0 12px 0;">' +
+                    'Try reinstalling AQC Unlock from Package Center. ' +
+                    'If this keeps happening, please report it at ' +
+                    '<a href="' + issuesUrl + '" target="_blank" rel="noopener">' + issuesUrl + '</a>' +
                 '</p>' +
                 '<button id="aqc-btn-recheck" type="button" style="padding:6px 14px;border:1px solid #ccc;' +
                     'border-radius:3px;background:#fff;cursor:pointer;">Check again</button>' +

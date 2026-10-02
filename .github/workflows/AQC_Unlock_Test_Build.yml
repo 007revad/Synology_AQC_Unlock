@@ -1,0 +1,140 @@
+name: Test Build AQC Unlock Test Package
+
+env:
+  # --- Edit these when reusing for a different package ---
+  REPO_NAME: "Synology_AQC_Unlock"
+  SPK_PREFIX: "AQC_Unlock"
+  HELPER_NAME: "aqcunlock"
+
+  # --- Runner config, shouldn't need to change ---
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_tag:
+        # Set zip file name
+        description: 'Version for this test build (also used to name the downloadable artifact zip - never published)'
+        required: false
+        default: ''
+
+jobs:
+  build-test-spk:
+    name: Build Test Package
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ['kvmx64']
+        #arch: ['noarch']
+        #dsm: ['7.0','7.1','7.2','7.3']
+        dsm: ['7.0']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Get test tag
+        id: get_tag
+        run: |
+          test_tag="${{ github.event.inputs.test_tag }}"
+          if [ -z "$test_tag" ]; then
+            test_tag="test-${{ github.run_number }}"
+          fi
+          echo "new_tag=$test_tag" >> $GITHUB_OUTPUT
+
+      - name: Determine DSM suffix
+        id: dsm_suffix
+        run: |
+          # Count how many DSM versions are in the matrix
+          dsm_list='${{ toJSON(matrix.dsm) }}'
+          count=$(echo "$dsm_list" | jq 'if type == "array" then length else 1 end')
+          current="${{ matrix.dsm }}"
+          if [ "$count" -eq 1 ] && [ "$current" = "7.0" ]; then
+            echo "suffix=DSM-7.x" >> $GITHUB_OUTPUT
+          else
+            echo "suffix=DSM-${current}" >> $GITHUB_OUTPUT
+          fi
+
+      # Synology's own platform codes (kvmx64, rtd1296, ...) aren't
+      # meaningful to someone picking a download - map to the arch
+      # label people actually recognize.
+      - name: Map arch to display label
+        id: arch_label
+        run: |
+          case "${{ matrix.arch }}" in
+            kvmx64) label="x86_64" ;;
+            rtd1296) label="armv8" ;;
+            armada38x) label="armv7" ;;
+            evansport) label="i686" ;;
+            *) echo "::error::No display label mapped for arch '${{ matrix.arch }}'"; exit 1 ;;
+          esac
+          echo "label=$label" >> $GITHUB_OUTPUT
+
+      - name: Synology Package Builder Github Action
+        #uses: tomgrv/synology-package-builder@v1.3.0
+        uses: 007revad/synology-package-builder@main
+        with:
+          dsm: ${{ matrix.dsm }}
+          arch: ${{ matrix.arch }}
+          output: ./dist
+
+      # SynoBuild/PkgCreate.py don't reliably fail the Action when our
+      # custom post-make helper-compile step (in stubs/SynoBuildConf/build)
+      # errors out - the log shows Synology's own tooling can still emit
+      # a .spk in that case. Check the actual built artifact instead of
+      # trusting the exit code chain through Synology's build driver.
+      - name: Verify setuid helper compiled correctly
+        run: |
+          set -euo pipefail
+
+          case "${{ matrix.arch }}" in
+            kvmx64)    expect_arch="x86-64" ;;
+            rtd1296)   expect_arch="ARM aarch64" ;;
+            armada38x) expect_arch="ARM" ;;
+            evansport) expect_arch="Intel 80386" ;;
+            *) echo "::error::No expected ELF arch mapped for '${{ matrix.arch }}'"; exit 1 ;;
+          esac
+
+          spk=$(ls ./dist/*.spk | grep -v _debug | head -n1)
+          if [ -z "$spk" ]; then
+            echo "::error::No non-debug .spk found in ./dist"
+            exit 1
+          fi
+
+          workdir=$(mktemp -d)
+          tar -xf "$spk" -C "$workdir" package.tgz
+          tar -xf "$workdir/package.tgz" -C "$workdir" bin/helper/${HELPER_NAME}-helper
+
+          helper="$workdir/bin/helper/${HELPER_NAME}-helper"
+          if [ ! -s "$helper" ]; then
+            echo "::error::${HELPER_NAME}-helper missing or empty in $spk - helper compile likely failed silently"
+            exit 1
+          fi
+
+          file_out=$(file -b "$helper")
+          echo "${HELPER_NAME}-helper: $file_out"
+          case "$file_out" in
+            *"$expect_arch"*) echo "OK: matches expected arch '$expect_arch'" ;;
+            *)
+              echo "::error::${HELPER_NAME}-helper in $spk doesn't look like '$expect_arch' (got: $file_out) - wrong-arch compiler was likely used"
+              exit 1
+              ;;
+          esac
+
+          rm -rf "$workdir"
+
+      - name: Remove debug spk and rename package
+        run: |
+          ls -l ./dist
+          rm -f ./dist/*_debug.spk
+          for f in ./dist/*.spk; do
+            mv "$f" "./dist/${SPK_PREFIX}-${{ steps.arch_label.outputs.label }}-${{ steps.get_tag.outputs.new_tag }}-${{ steps.dsm_suffix.outputs.suffix }}.spk"
+          done
+          ls -l ./dist
+
+      - name: Upload Package
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.SPK_PREFIX }}-${{ steps.arch_label.outputs.label }}-${{ steps.dsm_suffix.outputs.suffix }}-${{ steps.get_tag.outputs.new_tag }}
+          path: ./dist/*.spk

@@ -2,14 +2,14 @@
 
 set -u
 
-ROOT_SCRIPT="/var/packages/AQC_Unlock/scripts/start-stop-status-root"
-DEGRADED_MARKER="/var/packages/AQC_Unlock/var/state/no_sudo_degraded"
+HELPER="/var/packages/AQC_Unlock/target/bin/helper/aqcunlock-helper"
+DEGRADED_MARKER="/var/packages/AQC_Unlock/var/state/helper_degraded"
+OLD_DEGRADED_MARKER="/var/packages/AQC_Unlock/var/state/no_sudo_degraded"
 LOG_FILE="/var/packages/AQC_Unlock/var/aquantia.log"
 
-# aquantia.log is owned by AQC_Unlock (confirmed via ls -l), not root, so the
-# wrapper can write here directly even though it never got as far as sudo
-# succeeding - gives one unified timeline instead of splitting the "sudo was
-# denied" story across just the DSM popup and /tmp.
+# aquantia.log is owned by AQC_Unlock, not root, so the wrapper can write
+# here directly even when the helper isn't usable - gives one unified
+# timeline instead of splitting the story across just the DSM popup and /tmp.
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG_FILE" 2>/dev/null || true
 }
@@ -26,26 +26,43 @@ write_permission_message() {
         . "${script_dir}/lang/enu"
     fi
 
-    echo "${PKG_SUDOERS_MISSING}" > "$SYNOPKG_TEMP_LOGFILE"
+    # PKG_HELPER_MISSING should be added to the lang files; the English
+    # fallback keeps this working until it is.
+    echo "${PKG_HELPER_MISSING:-AQC Unlock started, but its privileged helper is not active so the network card is not unlocked yet. Click Open for details, then try reinstalling AQC Unlock in Package Center.}" > "$SYNOPKG_TEMP_LOGFILE"
 }
 
-# Attempt the real, actual authorized command directly - testing a proxy
-# command (e.g. "sudo -n true") is wrong, since the sudoers rule authorizes
-# this exact command path only, not arbitrary commands, so a proxy check can
-# report failure even when the real rule is correct. sudo -n prints
-# "a password is required" on stderr and refuses to run the target at all
-# when the rule doesn't match; any other outcome means sudo let the real
-# command execute, whatever exit code it returned.
-_output=$(sudo -n "$ROOT_SCRIPT" "$@" 2>&1)
-_status=$?
+# log and killall are no-ops in start-stop-status-root, so there is no need
+# to escalate for them. Anything unrecognised was also a silent exit 0 before.
+case "${1:-}" in
+    start|stop|status) ;;
+    *) exit 0 ;;
+esac
 
-if echo "$_output" | grep -q "a password is required"; then
+# Helper missing or not executable (e.g. package files damaged).
+helper_usable=1
+[ -x "$HELPER" ] || helper_usable=0
+
+_output=""
+_status=0
+if [ "$helper_usable" -eq 1 ]; then
+    _output=$("$HELPER" "$@" 2>&1)
+    _status=$?
+    # Every helper-side failure (not setuid, setuid/setgid failed, exec
+    # failed) prints a line starting "aqcunlock-helper:". The root script
+    # never does, so this can't be confused with the script's own exit code
+    # (which can legitimately be 1, 126 or 127 under set -e).
+    if echo "$_output" | grep -q "^aqcunlock-helper:"; then
+        helper_usable=0
+    fi
+fi
+
+if [ "$helper_usable" -eq 0 ]; then
     mkdir -p "$(dirname "$DEGRADED_MARKER")" 2>/dev/null || true
     touch "$DEGRADED_MARKER" 2>/dev/null || true
 
-    case "${1:-}" in
+    case "$1" in
         start)
-            log_message "sudo denied (${1:-}) - sudoers permission missing, degrading gracefully"
+            log_message "helper unavailable (start) - ${_output:-helper missing or not executable}, degrading gracefully"
             write_permission_message
             # Report success to DSM rather than tripping the install/start
             # failure -> "Repair" flow. The popup carries the real information;
@@ -53,28 +70,24 @@ if echo "$_output" | grep -q "a password is required"; then
             exit 0
             ;;
         stop)
-            log_message "sudo denied (stop) - nothing was actually running, nothing to stop"
-            # Nothing was ever actually started - nothing to stop.
+            log_message "helper unavailable (stop) - nothing was actually running, nothing to stop"
             exit 0
             ;;
         status)
             # Match what 'start' just reported, so DSM doesn't immediately flip
-            # back to "stopped"/broken on its next status poll.
-            # Deliberately not logged - status gets polled frequently and
-            # would flood the log with repeats of the same fact.
-            exit 0
-            ;;
-        *)
+            # back to "stopped"/broken on its next status poll. Deliberately
+            # not logged - status is polled frequently.
             exit 0
             ;;
     esac
 fi
 
-# Sudo actually ran the real command - clear any stale degraded marker and
-# any stale message from a previous failed start, then pass through the
-# real command's own output and exit code. (DSM's own startFailed marker is
-# cleared inside start-stop-status-root itself, since it needs root.)
-rm -f "$DEGRADED_MARKER" 2>/dev/null || true
+# The helper ran the real command - clear any stale degraded markers (this
+# package's old sudo-based one included) and any stale popup message from a
+# previous failed start, then pass through the command's output and exit
+# code. (DSM's own startFailed marker is cleared inside
+# start-stop-status-root itself, since it needs root.)
+rm -f "$DEGRADED_MARKER" "$OLD_DEGRADED_MARKER" 2>/dev/null || true
 if [ -n "${SYNOPKG_TEMP_LOGFILE:-}" ]; then
     : > "$SYNOPKG_TEMP_LOGFILE" 2>/dev/null || true
 fi
