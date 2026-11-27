@@ -120,92 +120,126 @@ create_ovs_bridge_for() {
 
     log_message "${iface}: BOOTPROTO=${bootproto} IPV6INIT=${ipv6init}${ipaddr:+ IPADDR=${ipaddr}}${netmask:+ NETMASK=${netmask}}"
 
-    # Register this physical interface with DSM's OVS tracking, and mark it as
-    # bridged - matching exactly what rc.network's boot-time scan would write.
-    if ! grep -qx "$iface" "$OVS_INTERFACE_CONF" 2>/dev/null; then
-        echo "$iface" >> "$OVS_INTERFACE_CONF"
-    fi
-    /usr/syno/bin/synosetkeyvalue "$ethcfg" BRIDGE "$bridge" 2>/dev/null || true
-
-    # Create the bridge's own ifcfg file
-    /usr/syno/bin/synosetkeyvalue "$ovscfg" DEVICE "$bridge" 2>/dev/null || true
-    /usr/syno/bin/synosetkeyvalue "$ovscfg" BOOTPROTO "$bootproto" 2>/dev/null || true
-    /usr/syno/bin/synosetkeyvalue "$ovscfg" ONBOOT yes 2>/dev/null || true
-    /usr/syno/bin/synosetkeyvalue "$ovscfg" TYPE OVS 2>/dev/null || true
-    /usr/syno/bin/synosetkeyvalue "$ovscfg" PRIMARY "$iface" 2>/dev/null || true
-    /usr/syno/bin/synosetkeyvalue "$ovscfg" IPV6INIT "$ipv6init" 2>/dev/null || true
-    /usr/syno/bin/synosetkeyvalue "$ovscfg" IPV6_ACCEPT_RA 1 2>/dev/null || true
-    if [ "$bootproto" = "static" ]; then
-        [ -n "$ipaddr" ] && /usr/syno/bin/synosetkeyvalue "$ovscfg" IPADDR "$ipaddr" 2>/dev/null || true
-        [ -n "$netmask" ] && /usr/syno/bin/synosetkeyvalue "$ovscfg" NETMASK "$netmask" 2>/dev/null || true
+    # Check if Open vSwitch is running
+    is_ovs=0
+    if [ -S "/var/run/openvswitch/db.sock" ] || systemctl is-active --quiet synoovs-vswitch 2>/dev/null; then
+        is_ovs=1
     fi
 
-    # Create the live bridge, matching rc.network's activate_ovs() sequence
-    if ! ovs-vsctl br-exists "$bridge" 2>/dev/null; then
-        ovs-vsctl add-br "$bridge"
-        log_message "Created OVS bridge ${bridge}"
-    fi
-
-    physmac=$(cat "/sys/class/net/${iface}/address" 2>/dev/null || true)
-    if [ -n "$physmac" ]; then
-        ovs-vsctl set bridge "$bridge" other-config:hwaddr="$physmac" 2>/dev/null || true
-    fi
-
-    ip addr flush dev "$iface" 2>/dev/null || true
-    ip link set "$iface" up 2>/dev/null || true
-
-    # DSM unconditionally disables IPv6 on the physical bridge-member port,
-    # regardless of the user's IPV6INIT choice - the bridge is what carries
-    # the real setting.
-    if [ -f "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" ]; then
-        echo 1 > "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" 2>/dev/null || true
-    fi
-
-    if ! ovs-vsctl list-ports "$bridge" 2>/dev/null | grep -qx "$iface"; then
-        ovs-vsctl add-port "$bridge" "$iface"
-    fi
-
-    mtu_value=$(get_mtu_value "$iface")
-    if [ -n "$mtu_value" ]; then
-        ifconfig "$iface" mtu "$mtu_value" 2>/dev/null || true
-    fi
-
-    ip link set "$bridge" up 2>/dev/null || true
-
-    if [ "$ipv6init" = "off" ]; then
-        if [ -f "/proc/sys/net/ipv6/conf/${bridge}/disable_ipv6" ]; then
-            echo 1 > "/proc/sys/net/ipv6/conf/${bridge}/disable_ipv6" 2>/dev/null || true
+    if [ "$is_ovs" -eq 1 ]; then
+        # Register this physical interface with DSM's OVS tracking, and mark it as
+        # bridged - matching exactly what rc.network's boot-time scan would write.
+        if ! grep -qx "$iface" "$OVS_INTERFACE_CONF" 2>/dev/null; then
+            echo "$iface" >> "$OVS_INTERFACE_CONF"
         fi
-        log_message "${bridge}: IPv6 Off (per ${iface}'s DSM setting) - disabled"
+        /usr/syno/bin/synosetkeyvalue "$ethcfg" BRIDGE "$bridge" 2>/dev/null || true
+
+        # Create the bridge's own ifcfg file
+        /usr/syno/bin/synosetkeyvalue "$ovscfg" DEVICE "$bridge" 2>/dev/null || true
+        /usr/syno/bin/synosetkeyvalue "$ovscfg" BOOTPROTO "$bootproto" 2>/dev/null || true
+        /usr/syno/bin/synosetkeyvalue "$ovscfg" ONBOOT yes 2>/dev/null || true
+        /usr/syno/bin/synosetkeyvalue "$ovscfg" TYPE OVS 2>/dev/null || true
+        /usr/syno/bin/synosetkeyvalue "$ovscfg" PRIMARY "$iface" 2>/dev/null || true
+        /usr/syno/bin/synosetkeyvalue "$ovscfg" IPV6INIT "$ipv6init" 2>/dev/null || true
+        /usr/syno/bin/synosetkeyvalue "$ovscfg" IPV6_ACCEPT_RA 1 2>/dev/null || true
+        if [ "$bootproto" = "static" ]; then
+            [ -n "$ipaddr" ] && /usr/syno/bin/synosetkeyvalue "$ovscfg" IPADDR "$ipaddr" 2>/dev/null || true
+            [ -n "$netmask" ] && /usr/syno/bin/synosetkeyvalue "$ovscfg" NETMASK "$netmask" 2>/dev/null || true
+        fi
+
+        # Create the live bridge, matching rc.network's activate_ovs() sequence
+        if ! ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+            ovs-vsctl add-br "$bridge" 2>/dev/null || true
+            log_message "Created OVS bridge ${bridge}"
+        fi
+
+        physmac=$(cat "/sys/class/net/${iface}/address" 2>/dev/null || true)
+        if [ -n "$physmac" ]; then
+            ovs-vsctl set bridge "$bridge" other-config:hwaddr="$physmac" 2>/dev/null || true
+        fi
+
+        ip addr flush dev "$iface" 2>/dev/null || true
+        ip link set "$iface" up 2>/dev/null || true
+
+        # DSM unconditionally disables IPv6 on the physical bridge-member port,
+        # regardless of the user's IPV6INIT choice - the bridge is what carries
+        # the real setting.
+        if [ -f "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" ]; then
+            echo 1 > "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" 2>/dev/null || true
+        fi
+
+        if ! ovs-vsctl list-ports "$bridge" 2>/dev/null | grep -qx "$iface"; then
+            ovs-vsctl add-port "$bridge" "$iface" 2>/dev/null || true
+        fi
+
+        mtu_value=$(get_mtu_value "$iface")
+        if [ -n "$mtu_value" ]; then
+            ifconfig "$iface" mtu "$mtu_value" 2>/dev/null || true
+        fi
+
+        ip link set "$bridge" up 2>/dev/null || true
+
+        if [ "$ipv6init" = "off" ]; then
+            if [ -f "/proc/sys/net/ipv6/conf/${bridge}/disable_ipv6" ]; then
+                echo 1 > "/proc/sys/net/ipv6/conf/${bridge}/disable_ipv6" 2>/dev/null || true
+            fi
+            log_message "${bridge}: IPv6 Off (per ${iface}'s DSM setting) - disabled"
+        else
+            log_message "${bridge}: IPv6 setting is '${ipv6init}' - left enabled"
+        fi
+
+        target_dev="$bridge"
+        is_bridged="yes"
     else
-        log_message "${bridge}: IPv6 setting is '${ipv6init}' - left enabled"
+        log_message "${iface}: Open vSwitch is inactive, configuring physical interface directly"
+        sed -i '/^BRIDGE=/d' "$ethcfg" 2>/dev/null || true
+        rm -f "$ovscfg" 2>/dev/null || true
+
+        ip link set "$iface" up 2>/dev/null || true
+
+        mtu_value=$(get_mtu_value "$iface")
+        if [ -n "$mtu_value" ]; then
+            ifconfig "$iface" mtu "$mtu_value" 2>/dev/null || true
+        fi
+
+        if [ "$ipv6init" = "off" ]; then
+            if [ -f "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" ]; then
+                echo 1 > "/proc/sys/net/ipv6/conf/${iface}/disable_ipv6" 2>/dev/null || true
+            fi
+            log_message "${iface}: IPv6 Off (per DSM setting) - disabled"
+        else
+            log_message "${iface}: IPv6 setting is '${ipv6init}' - left enabled"
+        fi
+
+        target_dev="$iface"
+        is_bridged="no"
     fi
 
     if [ "$bootproto" = "static" ]; then
         if [ -n "$ipaddr" ] && [ -n "$netmask" ]; then
             if [ -n "$mtu_value" ]; then
-                ifconfig "$bridge" "$ipaddr" netmask "$netmask" mtu "$mtu_value" 2>/dev/null || true
+                ifconfig "$target_dev" "$ipaddr" netmask "$netmask" mtu "$mtu_value" 2>/dev/null || true
             else
-                ifconfig "$bridge" "$ipaddr" netmask "$netmask" 2>/dev/null || true
+                ifconfig "$target_dev" "$ipaddr" netmask "$netmask" 2>/dev/null || true
             fi
-            log_message "${bridge}: applied static ${ipaddr}/${netmask}"
+            log_message "${target_dev}: applied static ${ipaddr}/${netmask}"
         else
-            log_message "${bridge}: BOOTPROTO=static but IPADDR/NETMASK missing, not configuring an address"
+            log_message "${target_dev}: BOOTPROTO=static but IPADDR/NETMASK missing, not configuring an address"
         fi
     else
-        lf="/tmp/dhcpv4.leases.${bridge}"
-        pf="/tmp/dhcpcd-${bridge}.pid"
+        lf="/tmp/dhcpv4.leases.${target_dev}"
+        pf="/tmp/dhcpcd-${target_dev}.pid"
         /usr/sbin/dhclient -4 -d -q \
             -lf "$lf" \
             -pf "$pf" \
             -cf /etc/dhclient/ipv4/dhclient.conf \
             -sf /var/run/dhclient-script \
-            "$bridge" >/dev/null 2>&1 &
-        log_message "Started dhclient for ${bridge} (pidfile ${pf})"
+            "$target_dev" >/dev/null 2>&1 &
+        log_message "Started dhclient for ${target_dev} (pidfile ${pf})"
     fi
 
-    # Record everything teardown needs: iface|bridge|bootproto|ethcfg_existed
-    echo "${iface}|${bridge}|${bootproto}|${ethcfg_existed}" >> "${STATE_DIR}/ovs_bridges"
+    # Record everything teardown needs: iface|bridge|bootproto|ethcfg_existed|is_bridged
+    echo "${iface}|${bridge}|${bootproto}|${ethcfg_existed}|${is_bridged}" >> "${STATE_DIR}/ovs_bridges"
 }
 
 teardown_ovs_bridge_for() {
@@ -213,65 +247,79 @@ teardown_ovs_bridge_for() {
     bridge="$2"
     bootproto="$3"
     ethcfg_existed="$4"
+    is_bridged="${5:-yes}"
 
     ethcfg="${NETSCRIPTS_DIR}/ifcfg-${iface}"
     ovscfg="${NETSCRIPTS_DIR}/ifcfg-${bridge}"
 
+    if [ "$is_bridged" = "yes" ]; then
+        target_dev="$bridge"
+    else
+        target_dev="$iface"
+    fi
+
     if [ "$bootproto" != "static" ]; then
-        pf="/tmp/dhcpcd-${bridge}.pid"
+        pf="/tmp/dhcpcd-${target_dev}.pid"
         if [ -f "$pf" ]; then
             kill "$(cat "$pf")" 2>/dev/null || true
             rm -f "$pf"
         fi
-        log_message "Stopped dhclient for ${bridge}"
+        log_message "Stopped dhclient for ${target_dev}"
     fi
 
-    if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
-        ip link set "$bridge" down 2>/dev/null || true
-        ovs-vsctl del-br "$bridge" 2>/dev/null || true
-        log_message "Removed OVS bridge ${bridge}"
-    fi
-
-    # DSM's Network Interface UI edits the bridge's ifcfg file (ifcfg-ovs_ethN),
-    # not the physical port's, while the bridge exists. Sync whatever the user's
-    # most recent change actually was back into ifcfg-ethN - our durable,
-    # persistent record for this slot - before we delete the bridge file.
-    if [ -f "$ovscfg" ]; then
-        live_bootproto=$(get_ifcfg_value "$ovscfg" "BOOTPROTO")
-        live_ipv6init=$(get_ifcfg_value "$ovscfg" "IPV6INIT")
-        live_ipaddr=$(get_ifcfg_value "$ovscfg" "IPADDR")
-        live_netmask=$(get_ifcfg_value "$ovscfg" "NETMASK")
-
-        if [ -n "$live_bootproto" ] && [ "$live_bootproto" != "$bootproto" ]; then
-            log_message "${iface}: bootproto changed ${bootproto} -> ${live_bootproto} while bridged, syncing back"
+    if [ "$is_bridged" = "yes" ]; then
+        if [ -S "/var/run/openvswitch/db.sock" ] && ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+            ip link set "$bridge" down 2>/dev/null || true
+            ovs-vsctl del-br "$bridge" 2>/dev/null || true
+            log_message "Removed OVS bridge ${bridge}"
         fi
 
-        [ -n "$live_bootproto" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" BOOTPROTO "$live_bootproto" 2>/dev/null || true; }
-        [ -n "$live_ipv6init" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" IPV6INIT "$live_ipv6init" 2>/dev/null || true; }
+        # DSM's Network Interface UI edits the bridge's ifcfg file (ifcfg-ovs_ethN),
+        # not the physical port's, while the bridge exists. Sync whatever the user's
+        # most recent change actually was back into ifcfg-ethN - our durable,
+        # persistent record for this slot - before we delete the bridge file.
+        if [ -f "$ovscfg" ]; then
+            live_bootproto=$(get_ifcfg_value "$ovscfg" "BOOTPROTO")
+            live_ipv6init=$(get_ifcfg_value "$ovscfg" "IPV6INIT")
+            live_ipaddr=$(get_ifcfg_value "$ovscfg" "IPADDR")
+            live_netmask=$(get_ifcfg_value "$ovscfg" "NETMASK")
 
-        if [ "$live_bootproto" = "static" ]; then
-            [ -n "$live_ipaddr" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" IPADDR "$live_ipaddr" 2>/dev/null || true; }
-            [ -n "$live_netmask" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" NETMASK "$live_netmask" 2>/dev/null || true; }
+            if [ -n "$live_bootproto" ] && [ "$live_bootproto" != "$bootproto" ]; then
+                log_message "${iface}: bootproto changed ${bootproto} -> ${live_bootproto} while bridged, syncing back"
+            fi
+
+            [ -n "$live_bootproto" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" BOOTPROTO "$live_bootproto" 2>/dev/null || true; }
+            [ -n "$live_ipv6init" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" IPV6INIT "$live_ipv6init" 2>/dev/null || true; }
+
+            if [ "$live_bootproto" = "static" ]; then
+                [ -n "$live_ipaddr" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" IPADDR "$live_ipaddr" 2>/dev/null || true; }
+                [ -n "$live_netmask" ] && { /usr/syno/bin/synosetkeyvalue "$ethcfg" NETMASK "$live_netmask" 2>/dev/null || true; }
+            else
+                # DHCP (or unset) - any leftover static fields from a prior config are stale
+                sed -i '/^IPADDR=/d;/^NETMASK=/d' "$ethcfg" 2>/dev/null || true
+            fi
+        fi
+
+        rm -f "$ovscfg" 2>/dev/null || true
+
+        if [ "$ethcfg_existed" = "yes" ]; then
+            # Only strip the BRIDGE field we added - leave the user's own
+            # BOOTPROTO/IPADDR/NETMASK/IPV6INIT preference for this slot untouched.
+            sed -i '/^BRIDGE=/d' "$ethcfg" 2>/dev/null || true
         else
-            # DHCP (or unset) - any leftover static fields from a prior config are stale
-            sed -i '/^IPADDR=/d;/^NETMASK=/d' "$ethcfg" 2>/dev/null || true
+            # We created this file fresh at start time - remove it entirely.
+            rm -f "$ethcfg" 2>/dev/null || true
+        fi
+
+        sed -i "/^${iface}\$/d" "$OVS_INTERFACE_CONF" 2>/dev/null || true
+    else
+        ip link set "$iface" down 2>/dev/null || true
+        if [ "$ethcfg_existed" != "yes" ]; then
+            rm -f "$ethcfg" 2>/dev/null || true
         fi
     fi
 
-    rm -f "$ovscfg"
-
-    if [ "$ethcfg_existed" = "yes" ]; then
-        # Only strip the BRIDGE field we added - leave the user's own
-        # BOOTPROTO/IPADDR/NETMASK/IPV6INIT preference for this slot untouched.
-        sed -i '/^BRIDGE=/d' "$ethcfg" 2>/dev/null || true
-    else
-        # We created this file fresh at start time - remove it entirely.
-        rm -f "$ethcfg"
-    fi
-
-    sed -i "/^${iface}\$/d" "$OVS_INTERFACE_CONF" 2>/dev/null || true
-
-    log_message "Reverted ifcfg/OVS registration for ${iface}"
+    log_message "Reverted ifcfg configuration for ${iface}"
 }
 
 inject_and_bind() {
@@ -328,14 +376,14 @@ inject_and_bind() {
 
             for iface in $ifaces; do
                 bridge="ovs_${iface}"
-                if ovs-vsctl br-exists "$bridge" 2>/dev/null; then
+                if [ -S "/var/run/openvswitch/db.sock" ] && ovs-vsctl br-exists "$bridge" 2>/dev/null; then
                     ethcfg="${NETSCRIPTS_DIR}/ifcfg-${iface}"
                     bootproto=$(get_ifcfg_value "$ethcfg" "BOOTPROTO")
                     [ -n "$bootproto" ] || bootproto="dhcp"
                     # This run didn't create ifcfg-<iface>, so mark it as
                     # pre-existing - otherwise a later uninstall would delete
                     # a file we never created.
-                    echo "${iface}|${bridge}|${bootproto}|yes" >> "${STATE_DIR}/ovs_bridges"
+                    echo "${iface}|${bridge}|${bootproto}|yes|yes" >> "${STATE_DIR}/ovs_bridges"
                     log_message "${bridge} already exists for ${iface}, recorded for status/teardown tracking"
                 else
                     create_ovs_bridge_for "$iface"
@@ -418,9 +466,9 @@ inject_and_bind() {
 
 stop_managed_ifaces() {
     if [ -f "${STATE_DIR}/ovs_bridges" ]; then
-        while IFS='|' read -r iface bridge bootproto ethcfg_existed; do
+        while IFS='|' read -r iface bridge bootproto ethcfg_existed is_bridged; do
             [ -n "$iface" ] || continue
-            teardown_ovs_bridge_for "$iface" "$bridge" "$bootproto" "$ethcfg_existed"
+            teardown_ovs_bridge_for "$iface" "$bridge" "$bootproto" "$ethcfg_existed" "${is_bridged:-yes}"
         done < "${STATE_DIR}/ovs_bridges"
         rm -f "${STATE_DIR}/ovs_bridges"
     fi
