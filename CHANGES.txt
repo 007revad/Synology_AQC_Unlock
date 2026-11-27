@@ -1,3 +1,6 @@
+v1.1.12
+- Added support for generic AQC107/AQC107S (1D6A:87B1) cards. Thanks @collins
+
 v1.1.11
 - Changed to no longer need the user to set sudoers permissions.
 
